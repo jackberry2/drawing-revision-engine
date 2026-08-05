@@ -3,13 +3,20 @@ from __future__ import annotations
 import time
 
 from dre.models.schemas import PipelineRunResult
-from dre.pipeline.base import PipelineContext, PipelineStep
-from dre.storage import repository
+from dre.pipeline.base import PipelineContext, PipelineStep, StepLogger
 
 
 class Pipeline:
-    def __init__(self, steps: list[PipelineStep]):
+    """Runs the stage sequence and logs each stage's input/output via a
+    `StepLogger`. Does not itself know about `flagged_changes` or any other
+    destination for the final alerts — that mapping/persistence is the
+    caller's job (see `dre.service`), keeping this class reusable for eval
+    runs that never touch Supabase.
+    """
+
+    def __init__(self, steps: list[PipelineStep], logger: StepLogger):
         self.steps = steps
+        self.logger = logger
 
     def run(self, ctx: PipelineContext) -> PipelineRunResult:
         for order, step in enumerate(self.steps, start=1):
@@ -17,7 +24,7 @@ class Pipeline:
             t0 = time.perf_counter()
             output = step.execute(ctx)
             latency_ms = int((time.perf_counter() - t0) * 1000)
-            repository.log_step(
+            self.logger.log_step(
                 run_id=ctx.run_id,
                 step_name=step.name,
                 step_order=order,
@@ -27,15 +34,6 @@ class Pipeline:
                 prompt_version=step.version,
                 latency_ms=latency_ms,
             )
-
-        change_events_by_id = {e.id: e for e in ctx.change_events}
-        for alert in ctx.alerts:
-            change_event = change_events_by_id.get(alert.change_event_id)
-            if change_event is None:
-                raise RuntimeError(
-                    f"alert references unknown change_event_id {alert.change_event_id!r}"
-                )
-            repository.save_alert(ctx.run_id, change_event, alert)
 
         assert ctx.detect_result is not None
         return PipelineRunResult(

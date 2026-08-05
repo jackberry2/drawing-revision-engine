@@ -29,10 +29,10 @@ class ClassifyStep(PipelineStep):
                 "type": "text",
                 "text": "Raw detections (JSON):\n" + dump_models(ctx.detect_result.raw_detections),
             },
-            {"type": "text", "text": "Previous version of the sheet:"},
-            encode_image(ctx.prev_image_path),
-            {"type": "text", "text": "Revised version of the sheet:"},
-            encode_image(ctx.revised_image_path),
+            {"type": "text", "text": "OLD revision of the sheet:"},
+            encode_image(ctx.old_image_path),
+            {"type": "text", "text": "NEW revision of the sheet:"},
+            encode_image(ctx.new_image_path),
         ]
         result = call_structured(
             system=load_prompt("classify"),

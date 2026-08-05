@@ -1,6 +1,6 @@
-"""Exercises the orchestrator's plumbing (stage sequencing, step logging,
-change-event persistence) with fake stages, so it's covered without needing
-real Claude calls."""
+"""Exercises the orchestrator's plumbing (stage sequencing, step logging via
+a fake StepLogger) with fake stages, so it's covered without needing real
+Claude calls or a live Supabase project."""
 
 from dre.models.schemas import (
     ChangeCategory,
@@ -14,7 +14,6 @@ from dre.models.schemas import (
 )
 from dre.pipeline.base import PipelineContext, PipelineStep
 from dre.pipeline.orchestrator import Pipeline
-from dre.storage import repository
 
 
 class FakeDetect(PipelineStep):
@@ -22,7 +21,7 @@ class FakeDetect(PipelineStep):
     version = "test"
 
     def input_for_log(self, ctx):
-        return {"prev": str(ctx.prev_image_path), "revised": str(ctx.revised_image_path)}
+        return {"old": str(ctx.old_image_path), "new": str(ctx.new_image_path)}
 
     def execute(self, ctx):
         result = DetectResult(
@@ -73,7 +72,7 @@ class FakeReason(PipelineStep):
                 bundled_change_ids=["cc_1"],
                 category=ChangeCategory.PANEL_RELOCATION,
                 root_cause_summary="Panel LP-2 relocated.",
-                downstream_implications=[],
+                downstream_implications=["Circuit 14 re-routes."],
                 affected_entities=[EntityRef(entity_type="panel", identifier="LP-2")],
             )
         ]
@@ -120,6 +119,7 @@ class FakeDescribe(PipelineStep):
                 category=ChangeCategory.PANEL_RELOCATION,
                 headline="Panel LP-2 relocated",
                 description="Panel LP-2 relocated to a new location.",
+                impact_note="Circuit 14 re-routes.",
                 affected_entities=[EntityRef(entity_type="panel", identifier="LP-2")],
                 confidence=ctx.confidence_scores["ce_1"],
             )
@@ -128,23 +128,35 @@ class FakeDescribe(PipelineStep):
         return alerts
 
 
+class RecordingStepLogger:
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def log_step(self, **kwargs):
+        self.calls.append(kwargs)
+
+
 def test_pipeline_end_to_end(tmp_path):
-    prev = tmp_path / "prev.png"
-    revised = tmp_path / "revised.png"
-    prev.write_bytes(b"fake")
-    revised.write_bytes(b"fake")
+    old = tmp_path / "old.png"
+    new = tmp_path / "new.png"
+    old.write_bytes(b"fake")
+    new.write_bytes(b"fake")
 
-    run_id = repository.new_id("run")
-    repository.create_run(str(prev), str(revised), run_id=run_id)
-
-    ctx = PipelineContext(run_id=run_id, prev_image_path=prev, revised_image_path=revised)
-    pipeline = Pipeline([FakeDetect(), FakeClassify(), FakeReason(), FakeConfidence(), FakeDescribe()])
+    logger = RecordingStepLogger()
+    ctx = PipelineContext(run_id="run_test", old_image_path=old, new_image_path=new)
+    pipeline = Pipeline([FakeDetect(), FakeClassify(), FakeReason(), FakeConfidence(), FakeDescribe()], logger)
     result = pipeline.run(ctx)
 
-    assert result.run_id == run_id
+    assert result.run_id == "run_test"
     assert len(result.alerts) == 1
     assert result.alerts[0].headline == "Panel LP-2 relocated"
+    assert result.alerts[0].impact_note == "Circuit 14 re-routes."
 
-    stored = repository.get_change_events_for_run(run_id)
-    assert len(stored) == 1
-    assert stored[0].category == "panel_relocation"
+    assert [c["step_name"] for c in logger.calls] == [
+        "detect",
+        "classify",
+        "reason",
+        "confidence",
+        "describe",
+    ]
+    assert all(c["run_id"] == "run_test" for c in logger.calls)

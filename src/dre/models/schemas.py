@@ -5,6 +5,11 @@ regardless of what implementation backs the stage (prompted LLM today, a
 custom-trained model later). Keeping the contracts here — separate from any
 stage's implementation — is what makes a stage swappable without touching
 its neighbors.
+
+Sheet revisions are always "old" (the prior version) and "new" (the revised
+version), explicitly labeled end to end — matching how the caller identifies
+them (drawings.old_drawing_id / new_drawing_id) — and never inferred from
+file order or content.
 """
 
 from __future__ import annotations
@@ -48,9 +53,9 @@ class EntityRef(BaseModel):
 class RawDetection(BaseModel):
     id: str
     sheet_ref: Optional[str] = None
-    present_in: Literal["prev_only", "revised_only", "both_modified"]
-    region_prev: Optional[BBox] = None
-    region_revised: Optional[BBox] = None
+    present_in: Literal["old_only", "new_only", "both_modified"]
+    region_old: Optional[BBox] = None
+    region_new: Optional[BBox] = None
     geometry_description: str = Field(
         ..., description="Terse geometric description, no trade judgment yet."
     )
@@ -59,7 +64,7 @@ class RawDetection(BaseModel):
 class ExtractedTable(BaseModel):
     id: str
     table_type: Literal["panel_schedule", "device_schedule", "legend", "other"]
-    sheet_version: Literal["prev", "revised"]
+    sheet_version: Literal["old", "new"]
     title: Optional[str] = None
     region: Optional[BBox] = None
     rows: list[dict[str, str]] = Field(default_factory=list)
@@ -141,7 +146,14 @@ class FinalChangeAlert(BaseModel):
     category: ChangeCategory
     headline: str
     description: str = Field(
-        ..., description="Full plain-language estimator narrative. No coordinates/geometry."
+        ..., description="Root-cause change in plain trade language. No coordinates/geometry."
+    )
+    impact_note: Optional[str] = Field(
+        None,
+        description=(
+            "Downstream consequences (derived from ChangeEvent.downstream_implications "
+            "and schedule_corroboration), kept separate from `description`."
+        ),
     )
     affected_entities: list[EntityRef] = Field(default_factory=list)
     confidence: ConfidenceScore
@@ -150,14 +162,16 @@ class FinalChangeAlert(BaseModel):
 
 class DescribeItem(BaseModel):
     """What the describe stage's LLM call produces. Confidence is computed by
-    the (separate, earlier) confidence stage and merged in afterward — the
-    describe step never invents its own confidence."""
+    the (separate, earlier) confidence stage and merged in afterward, and
+    impact_note is derived programmatically from the ChangeEvent rather than
+    re-authored by the LLM — this step only writes the root-cause headline
+    and description."""
 
     change_event_id: str
     category: ChangeCategory
     headline: str
     description: str = Field(
-        ..., description="Full plain-language estimator narrative. No coordinates/geometry."
+        ..., description="Root-cause change in plain trade language. No coordinates/geometry."
     )
     affected_entities: list[EntityRef] = Field(default_factory=list)
     sheet_ref: Optional[str] = None

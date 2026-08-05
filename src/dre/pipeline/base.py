@@ -13,7 +13,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Protocol
 
 from dre.models.schemas import (
     ChangeEvent,
@@ -27,8 +27,8 @@ from dre.models.schemas import (
 @dataclass
 class PipelineContext:
     run_id: str
-    prev_image_path: Path
-    revised_image_path: Path
+    old_image_path: Path
+    new_image_path: Path
     sheet_ref: Optional[str] = None
 
     detect_result: Optional[DetectResult] = None
@@ -51,3 +51,31 @@ class PipelineStep(ABC):
     def execute(self, ctx: PipelineContext) -> Any:
         """Do the work, mutate ctx with the result, and return the result
         (also JSON-serializable) for logging."""
+
+
+class StepLogger(Protocol):
+    """What the orchestrator needs to persist a stage's input/output. Kept
+    separate from any concrete backend so the reasoning pipeline itself never
+    depends on where logs end up (Supabase in production, nowhere in eval
+    runs against local test images with no backing rows to attach to)."""
+
+    def log_step(
+        self,
+        *,
+        run_id: str,
+        step_name: str,
+        step_order: int,
+        input_data: Any,
+        output_data: Any,
+        model_used: Optional[str],
+        prompt_version: Optional[str],
+        latency_ms: Optional[int],
+    ) -> None: ...
+
+
+class NullStepLogger:
+    """No-op logger — used by `dre eval`, which runs the pipeline against
+    local test images with no run/analysis_request row to log against."""
+
+    def log_step(self, **kwargs: Any) -> None:
+        return None

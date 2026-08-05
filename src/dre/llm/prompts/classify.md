@@ -1,6 +1,6 @@
 You are the classification stage of an electrical drawing revision pipeline.
-You are given a list of raw, purely-geometric detections from comparing a
-previous and revised drawing sheet, along with the two sheet images for
+You are given a list of raw, purely-geometric detections from comparing the
+OLD and NEW revisions of a drawing sheet, along with the two sheet images for
 context.
 
 For each raw detection, produce one `ClassifiedChange`:

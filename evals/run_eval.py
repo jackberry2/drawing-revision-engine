@@ -1,5 +1,8 @@
 """Runs the pipeline against every case in evals/cases/ and scores the result
-against that case's expected_output.json. Meant to be run every iteration:
+(mapped onto the flagged_changes shape) against that case's
+expected_output.json. Fully local — no Supabase credentials needed, since it
+runs the pipeline directly against local old/new image files with a no-op
+step logger. Meant to be run every iteration:
 
     dre eval
     # or directly:
@@ -10,11 +13,14 @@ from __future__ import annotations
 
 import json
 import sys
+import uuid
 from pathlib import Path
 
-from scorer import ExpectedCase, score_case
+from scorer import ExpectedCase, MappedAlert, score_case
 
-from dre.pipeline.runner import run_pipeline
+from dre.mapping import to_change_type, to_confidence_percentage, to_confidence_tier
+from dre.pipeline.base import NullStepLogger, PipelineContext
+from dre.pipeline.runner import build_pipeline
 
 CASES_DIR = Path(__file__).parent / "cases"
 
@@ -26,6 +32,17 @@ def find_case_dirs() -> list[Path]:
 def find_image(case_dir: Path, stem: str) -> Path | None:
     matches = sorted(case_dir.glob(f"{stem}.*"))
     return matches[0] if matches else None
+
+
+def to_mapped_alert(alert) -> MappedAlert:
+    return MappedAlert(
+        change_type=to_change_type(alert.category),
+        description=alert.description,
+        impact_note=alert.impact_note,
+        confidence_tier=to_confidence_tier(alert.confidence.score),
+        confidence_percentage=to_confidence_percentage(alert.confidence.score),
+        entity_identifiers=[e.identifier for e in alert.affected_entities],
+    )
 
 
 def main() -> int:
@@ -40,31 +57,39 @@ def main() -> int:
     for case_dir in case_dirs:
         case_id = case_dir.name
         expected_path = case_dir / "expected_output.json"
-        prev_image = find_image(case_dir, "prev")
-        revised_image = find_image(case_dir, "revised")
+        old_image = find_image(case_dir, "old")
+        new_image = find_image(case_dir, "new")
 
-        if not expected_path.exists() or prev_image is None or revised_image is None:
-            print(f"[{case_id}] SKIP - missing prev/revised image or expected_output.json")
+        if not expected_path.exists() or old_image is None or new_image is None:
+            print(f"[{case_id}] SKIP - missing old/new image or expected_output.json")
             continue
 
         ran_any = True
         expected = ExpectedCase.model_validate(json.loads(expected_path.read_text()))
-        result = run_pipeline(prev_image, revised_image, sheet_id=case_id)
-        score = score_case(case_id, result.alerts, expected)
+
+        ctx = PipelineContext(
+            run_id=f"eval_{uuid.uuid4().hex[:12]}",
+            old_image_path=old_image,
+            new_image_path=new_image,
+            sheet_ref=case_id,
+        )
+        result = build_pipeline(logger=NullStepLogger()).run(ctx)
+        mapped_alerts = [to_mapped_alert(a) for a in result.alerts]
+        score = score_case(case_id, mapped_alerts, expected)
 
         status = "PASS" if score.passed else "FAIL"
-        print(f"[{case_id}] {status}  (run_id={result.run_id})")
+        print(f"[{case_id}] {status}  (run_id={ctx.run_id})")
         for m in score.matches:
             mark = "ok    " if m.matched else "MISSED"
-            detail = m.actual_headline or m.reason
-            print(f"    {mark}  expected={m.expected_category!r}  {detail}")
-        for headline in score.hallucinated:
-            print(f"    EXTRA   unexpected alert: {headline!r}")
+            detail = m.actual_description or m.reason
+            print(f"    {mark}  expected={m.expected_change_type!r}  {detail}")
+        for description in score.hallucinated:
+            print(f"    EXTRA   unexpected alert: {description!r}")
 
         all_passed = all_passed and score.passed
 
     if not ran_any:
-        print("No runnable cases (all skipped). Add prev/revised images + expected_output.json.")
+        print("No runnable cases (all skipped). Add old/new images + expected_output.json.")
         return 1
 
     print("")

@@ -20,16 +20,16 @@ class DetectStep(PipelineStep):
 
     def input_for_log(self, ctx: PipelineContext) -> dict:
         return {
-            "prev_image_path": str(ctx.prev_image_path),
-            "revised_image_path": str(ctx.revised_image_path),
+            "old_image_path": str(ctx.old_image_path),
+            "new_image_path": str(ctx.new_image_path),
         }
 
     def execute(self, ctx: PipelineContext) -> DetectResult:
         user_content = [
-            {"type": "text", "text": "Previous version of the sheet:"},
-            encode_image(ctx.prev_image_path),
-            {"type": "text", "text": "Revised version of the sheet:"},
-            encode_image(ctx.revised_image_path),
+            {"type": "text", "text": "OLD revision of the sheet:"},
+            encode_image(ctx.old_image_path),
+            {"type": "text", "text": "NEW revision of the sheet:"},
+            encode_image(ctx.new_image_path),
         ]
         result = call_structured(
             system=load_prompt("detect"),

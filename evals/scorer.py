@@ -1,12 +1,12 @@
-"""Compares actual pipeline output against a known-correct expected_output.json
-for one eval case.
+"""Compares actual pipeline output — mapped onto the flagged_changes shape,
+via the same `dre.mapping` code path the live service uses — against a
+known-correct expected_output.json for one eval case.
 
-Matching is deliberately loose on identity (generated ids never match run to
-run) and strict on substance: category, the trade entities involved, and any
-description keywords the expected case cares about. A case fails if any
-expected alert goes unmatched (a miss) or any actual alert matches nothing
-expected (a hallucination) — that second condition is what stops the engine
-from over-reporting borderline/noise changes as it's tuned.
+Per the user's own grading standard: judge whether the same changes were
+captured, with a roughly matching confidence tier and correct bundling
+reasoning — not word-for-word text. Matching is loose on identity (ids are
+regenerated every run) and on wording (keyword/substring checks), strict on
+`change_type` and (when specified) `confidence_tier`.
 """
 
 from __future__ import annotations
@@ -15,14 +15,23 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from dre.models.schemas import FinalChangeAlert
+
+class MappedAlert(BaseModel):
+    """The flagged_changes-shaped view of one alert, produced by mapping.py."""
+
+    change_type: str
+    description: str
+    impact_note: Optional[str] = None
+    confidence_tier: str
+    confidence_percentage: int
+    entity_identifiers: list[str] = []
 
 
 class ExpectedAlert(BaseModel):
-    category: str
+    change_type: str  # "added" | "removed" | "moved" | "modified"
     required_entities: list[str] = []
     description_keywords: list[str] = []
-    min_confidence: Optional[float] = None
+    confidence_tier: Optional[str] = None  # "high" | "medium" | "low", exact match if set
 
 
 class ExpectedCase(BaseModel):
@@ -31,8 +40,8 @@ class ExpectedCase(BaseModel):
 
 class MatchDetail(BaseModel):
     matched: bool
-    expected_category: str
-    actual_headline: Optional[str] = None
+    expected_change_type: str
+    actual_description: Optional[str] = None
     reason: str = ""
 
 
@@ -47,28 +56,28 @@ class CaseScore(BaseModel):
         return not self.missed and not self.hallucinated
 
 
-def _alert_matches(alert: FinalChangeAlert, expected: ExpectedAlert) -> tuple[bool, str]:
-    if alert.category.value != expected.category:
-        return False, f"category {alert.category.value!r} != expected {expected.category!r}"
+def _alert_matches(alert: MappedAlert, expected: ExpectedAlert) -> tuple[bool, str]:
+    if alert.change_type != expected.change_type:
+        return False, f"change_type {alert.change_type!r} != expected {expected.change_type!r}"
 
-    haystack = alert.description.lower() + " " + " ".join(
-        e.identifier.lower() for e in alert.affected_entities
-    )
+    haystack = " ".join(
+        [alert.description, alert.impact_note or "", *alert.entity_identifiers]
+    ).lower()
     for required in expected.required_entities:
         if required.lower() not in haystack:
             return False, f"missing required entity {required!r}"
     for keyword in expected.description_keywords:
-        if keyword.lower() not in alert.description.lower():
+        if keyword.lower() not in haystack:
             return False, f"missing description keyword {keyword!r}"
-    if expected.min_confidence is not None and alert.confidence.score < expected.min_confidence:
+    if expected.confidence_tier is not None and alert.confidence_tier != expected.confidence_tier:
         return (
             False,
-            f"confidence {alert.confidence.score:.2f} below required {expected.min_confidence:.2f}",
+            f"confidence_tier {alert.confidence_tier!r} != expected {expected.confidence_tier!r}",
         )
     return True, "ok"
 
 
-def score_case(case_id: str, actual_alerts: list[FinalChangeAlert], expected: ExpectedCase) -> CaseScore:
+def score_case(case_id: str, actual_alerts: list[MappedAlert], expected: ExpectedCase) -> CaseScore:
     remaining = list(actual_alerts)
     matches: list[MatchDetail] = []
     missed: list[ExpectedAlert] = []
@@ -84,12 +93,18 @@ def score_case(case_id: str, actual_alerts: list[FinalChangeAlert], expected: Ex
             reason = why
         if found is None:
             missed.append(exp)
-            matches.append(MatchDetail(matched=False, expected_category=exp.category, reason=reason))
+            matches.append(
+                MatchDetail(matched=False, expected_change_type=exp.change_type, reason=reason)
+            )
         else:
             remaining.remove(found)
             matches.append(
-                MatchDetail(matched=True, expected_category=exp.category, actual_headline=found.headline)
+                MatchDetail(
+                    matched=True,
+                    expected_change_type=exp.change_type,
+                    actual_description=found.description,
+                )
             )
 
-    hallucinated = [a.headline for a in remaining]
+    hallucinated = [a.description for a in remaining]
     return CaseScore(case_id=case_id, matches=matches, missed=missed, hallucinated=hallucinated)

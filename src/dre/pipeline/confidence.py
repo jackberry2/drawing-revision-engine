@@ -27,10 +27,10 @@ class ConfidenceStep(PipelineStep):
 
         user_content = [
             {"type": "text", "text": "Change events (JSON):\n" + dump_models(ctx.change_events)},
-            {"type": "text", "text": "Previous version of the sheet:"},
-            encode_image(ctx.prev_image_path),
-            {"type": "text", "text": "Revised version of the sheet:"},
-            encode_image(ctx.revised_image_path),
+            {"type": "text", "text": "OLD revision of the sheet:"},
+            encode_image(ctx.old_image_path),
+            {"type": "text", "text": "NEW revision of the sheet:"},
+            encode_image(ctx.new_image_path),
         ]
         result = call_structured(
             system=load_prompt("confidence"),

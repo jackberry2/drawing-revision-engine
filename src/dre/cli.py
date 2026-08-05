@@ -6,8 +6,8 @@ from pathlib import Path
 
 import click
 
-from dre.pipeline.runner import run_pipeline
-from dre.storage import repository
+from dre import service
+from dre.supa import repository as repo
 
 
 @click.group()
@@ -16,21 +16,27 @@ def cli():
 
 
 @cli.command()
-@click.argument("prev_image", type=click.Path(exists=True, path_type=Path))
-@click.argument("revised_image", type=click.Path(exists=True, path_type=Path))
-@click.option("--sheet-id", default=None, help="Optional sheet identifier for this run.")
-def run(prev_image: Path, revised_image: Path, sheet_id: str | None):
-    """Run the pipeline once on a previous/revised image pair."""
-    result = run_pipeline(prev_image, revised_image, sheet_id=sheet_id)
-    click.echo(f"run_id: {result.run_id}")
-    if not result.alerts:
+@click.argument("analysis_request_id")
+def analyze(analysis_request_id: str):
+    """Run the pipeline for a real analysis_requests row and write results
+    to flagged_changes. Manual equivalent of POST /analyze/{id}."""
+    result = service.analyze_request(analysis_request_id)
+    click.echo(f"run_id: {result['run_id']}")
+    if not result["alerts"]:
         click.echo("No material changes detected.")
         return
-    for alert in result.alerts:
+    for alert in result["alerts"]:
         click.echo("")
-        click.echo(f"[{alert.category.value}] {alert.headline}")
-        click.echo(f"  confidence: {alert.confidence.score:.2f}  ({alert.confidence.rationale})")
-        click.echo(f"  {alert.description}")
+        click.echo(f"[{alert['category']}] {alert['headline']}")
+        click.echo(
+            f"  confidence: {alert['confidence']['score']:.2f}  "
+            f"({alert['confidence']['rationale']})"
+        )
+        click.echo(f"  {alert['description']}")
+        if alert.get("impact_note"):
+            click.echo(f"  impact: {alert['impact_note']}")
+    click.echo("")
+    click.echo(f"Wrote {len(result['flagged_change_ids'])} row(s) to flagged_changes.")
 
 
 @cli.command()
@@ -43,45 +49,50 @@ def eval():
 
 
 @cli.command()
-@click.argument("run_id")
+@click.argument("flagged_change_id")
 @click.option("--reviewer", default="unknown", help="Name/id of the person reviewing.")
-def review(run_id: str, reviewer: str):
-    """Interactively capture human corrections for a past run's change events."""
-    change_events = repository.get_change_events_for_run(run_id)
-    if not change_events:
-        click.echo(f"No change events found for run {run_id!r}.")
-        return
+def review(flagged_change_id: str, reviewer: str):
+    """Interactively capture a human correction for one flagged_changes row."""
+    change = repo.get_flagged_change(flagged_change_id)
+    click.echo(f"[{change['change_type']}] {change['description']}")
+    if change.get("impact_note"):
+        click.echo(f"  impact: {change['impact_note']}")
+    click.echo(
+        f"  system confidence: {change['confidence_tier']} ({change['confidence_percentage']}%)"
+    )
 
-    for ce in change_events:
-        click.echo("")
-        click.echo(f"[{ce.category}] {ce.final_description}")
-        click.echo(f"  system confidence: {ce.confidence_score:.2f}")
-        verdict = click.prompt(
-            "  verdict", type=click.Choice(["confirmed", "corrected", "false_positive"])
-        )
-        corrected_category = corrected_description = None
-        corrected_confidence = None
-        notes = click.prompt("  notes (optional)", default="", show_default=False)
-        if verdict == "corrected":
-            corrected_category = click.prompt("  corrected category", default="", show_default=False) or None
-            corrected_description = (
-                click.prompt("  corrected description", default="", show_default=False) or None
+    verdict = click.prompt("verdict", type=click.Choice(["confirmed", "corrected", "false_positive"]))
+    corrected_change_type = corrected_description = None
+    corrected_confidence_percentage = None
+    notes = click.prompt("notes (optional)", default="", show_default=False)
+    if verdict == "corrected":
+        corrected_change_type = (
+            click.prompt(
+                "corrected change_type",
+                type=click.Choice(["added", "removed", "moved", "modified"]),
+                default="",
+                show_default=False,
             )
-            conf_str = click.prompt("  corrected confidence 0-1 (optional)", default="", show_default=False)
-            corrected_confidence = float(conf_str) if conf_str else None
-
-        repository.record_human_review(
-            change_event_id=ce.id,
-            run_id=run_id,
-            reviewer=reviewer,
-            verdict=verdict,
-            corrected_category=corrected_category,
-            corrected_description=corrected_description,
-            corrected_confidence=corrected_confidence,
-            notes=notes or None,
+            or None
         )
+        corrected_description = (
+            click.prompt("corrected description", default="", show_default=False) or None
+        )
+        conf_str = click.prompt(
+            "corrected confidence 0-100 (optional)", default="", show_default=False
+        )
+        corrected_confidence_percentage = int(conf_str) if conf_str else None
 
-    click.echo("")
+    repo.record_human_review(
+        flagged_change_id=flagged_change_id,
+        run_id=None,
+        reviewer=reviewer,
+        verdict=verdict,
+        corrected_change_type=corrected_change_type,
+        corrected_description=corrected_description,
+        corrected_confidence_percentage=corrected_confidence_percentage,
+        notes=notes or None,
+    )
     click.echo("Review recorded.")
 
 
