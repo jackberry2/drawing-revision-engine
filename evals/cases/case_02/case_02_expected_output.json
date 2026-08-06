@@ -1,0 +1,15 @@
+{
+  "sheet_number": "E-202",
+  "old_revision": "1",
+  "new_revision": "2",
+  "expected_flagged_changes": [
+    {
+      "change_type": "added",
+      "description": "Outlet O2 added on new circuit C2",
+      "confidence_tier": "high",
+      "confidence_percentage": 97,
+      "impact_note": "New circuit added — verify panel P-3 has available capacity"
+    }
+  ],
+  "notes_for_evaluation": "This is the clean baseline case — a single unambiguous change on an otherwise identical, high-quality drawing. Nothing else in the sheet changed. This case exists to confirm the pipeline doesn't over-flag or hallucinate additional changes on a clean input, and that it correctly scores confidence high (90%+) when the input quality and clarity genuinely support it."
+}

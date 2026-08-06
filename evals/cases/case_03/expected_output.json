@@ -1,0 +1,9 @@
+{
+  "alerts": [
+    {
+      "change_type": ["moved", "modified"],
+      "required_entities": ["DS-2"],
+      "confidence_tier": "low"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "alerts": [
+    {
+      "change_type": "added",
+      "required_entities": ["O2"],
+      "confidence_tier": "high"
+    }
+  ]
+}

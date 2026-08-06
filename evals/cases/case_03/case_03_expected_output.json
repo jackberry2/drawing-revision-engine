@@ -1,0 +1,15 @@
+{
+  "sheet_number": "E-301",
+  "old_revision": "A",
+  "new_revision": "B",
+  "expected_flagged_changes": [
+    {
+      "change_type": "moved",
+      "description": "DS-2 appears shifted slightly from prior location; field markup \"VERIFY?\" present near symbol",
+      "confidence_tier": "low",
+      "confidence_percentage": 55,
+      "impact_note": "Possible relocation, but scan quality and small shift distance make this unconfirmed — recommend field verification before pricing any conduit rework"
+    }
+  ],
+  "notes_for_evaluation": "This is the deliberately ambiguous case: DS-2 shifted only slightly (~15px, roughly a foot at this drawing's scale), and Rev B is a simulated degraded field scan (rotated, blurred, faded) with a hand-drawn 'VERIFY?' annotation circling the symbol. The critical thing this case tests is NOT whether the pipeline detects the shift, but whether it correctly scores this as LOW confidence rather than confidently asserting a move happened or confidently asserting nothing changed. A confident answer in either direction on this case is a failure — the correct behavior is genuine, stated uncertainty. DS-1 did not move and should not be flagged."
+}

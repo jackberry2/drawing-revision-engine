@@ -15,11 +15,11 @@ ConfidenceTier = Literal["high", "medium", "low"]
 
 _CATEGORY_TO_CHANGE_TYPE: dict[ChangeCategory, ChangeType] = {
     ChangeCategory.PANEL_RELOCATION: "moved",
+    ChangeCategory.DEVICE_RELOCATION: "moved",
     ChangeCategory.DEVICE_ADDED: "added",
     ChangeCategory.DEVICE_REMOVED: "removed",
     ChangeCategory.CIRCUIT_REROUTE: "modified",
     ChangeCategory.DEVICE_MODIFIED: "modified",
-    ChangeCategory.CONDUIT_RUN_CHANGE: "modified",
     ChangeCategory.SCHEDULE_LABEL_EDIT: "modified",
     ChangeCategory.ANNOTATION_ONLY: "modified",
     ChangeCategory.NOISE_NON_MATERIAL: "modified",

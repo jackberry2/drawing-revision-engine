@@ -22,11 +22,11 @@ from pydantic import BaseModel, Field
 
 class ChangeCategory(str, Enum):
     PANEL_RELOCATION = "panel_relocation"
-    CIRCUIT_REROUTE = "circuit_reroute"
+    DEVICE_RELOCATION = "device_relocation"  # a device/equipment (not a panel) physically moved
+    CIRCUIT_REROUTE = "circuit_reroute"  # includes conduit run/path changes
     DEVICE_ADDED = "device_added"
     DEVICE_REMOVED = "device_removed"
     DEVICE_MODIFIED = "device_modified"
-    CONDUIT_RUN_CHANGE = "conduit_run_change"
     SCHEDULE_LABEL_EDIT = "schedule_label_edit"
     ANNOTATION_ONLY = "annotation_only"
     NOISE_NON_MATERIAL = "noise_non_material"

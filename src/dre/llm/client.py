@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Type, TypeVar
 
 import anthropic
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from dre import config
 
@@ -57,9 +57,13 @@ def call_structured(
     response_model: Type[T],
     model: str = config.REASONING_MODEL,
     max_tokens: int = 8192,
+    max_attempts: int = 3,
 ) -> T:
     """Call Claude with a forced tool-use call shaped by `response_model`,
-    returning a validated instance of it."""
+    returning a validated instance of it. Retries the call itself (not just
+    the parse) on a malformed tool payload — an occasional model quirk on
+    larger/nested schemas, not something a client-side fix can guarantee
+    against, but re-sampling reliably clears it."""
     tool_name = f"emit_{response_model.__name__.lower()}"
     tool = {
         "name": tool_name,
@@ -67,17 +71,48 @@ def call_structured(
         "input_schema": response_model.model_json_schema(),
     }
 
-    response = get_client().messages.create(
-        model=model,
-        max_tokens=max_tokens,
-        system=system,
-        tools=[tool],
-        tool_choice={"type": "tool", "name": tool_name},
-        messages=[{"role": "user", "content": user_content}],
-    )
+    last_error: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        response = get_client().messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            system=system,
+            tools=[tool],
+            tool_choice={"type": "tool", "name": tool_name},
+            messages=[{"role": "user", "content": user_content}],
+        )
 
-    for block in response.content:
-        if block.type == "tool_use" and block.name == tool_name:
-            return response_model.model_validate(block.input)
+        tool_block = next(
+            (b for b in response.content if b.type == "tool_use" and b.name == tool_name), None
+        )
+        if tool_block is None:
+            if response.stop_reason == "max_tokens":
+                raise RuntimeError(
+                    f"Claude hit max_tokens ({max_tokens}) before finishing the "
+                    f"{tool_name!r} tool call — response was truncated, not just malformed."
+                )
+            raise RuntimeError(f"Claude did not return the expected tool call {tool_name!r}")
 
-    raise RuntimeError(f"Claude did not return the expected tool call {tool_name!r}")
+        try:
+            return _parse_tool_input(tool_block.input, response_model)
+        except (ValidationError, json.JSONDecodeError) as exc:
+            last_error = exc
+
+    raise RuntimeError(
+        f"Claude returned a malformed {tool_name!r} payload {max_attempts} times in a row"
+    ) from last_error
+
+
+def _parse_tool_input(raw_input: dict, response_model: Type[T]) -> T:
+    """Occasionally the model nests the whole JSON payload as a string under
+    a single key instead of returning the structured object directly (a
+    known tool-use quirk on larger/nested schemas). Fall back to parsing
+    that string before giving up."""
+    try:
+        return response_model.model_validate(raw_input)
+    except ValidationError:
+        if isinstance(raw_input, dict) and len(raw_input) == 1:
+            (only_value,) = raw_input.values()
+            if isinstance(only_value, str):
+                return response_model.model_validate(json.loads(only_value))
+        raise

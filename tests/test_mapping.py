@@ -8,11 +8,11 @@ from dre.models.schemas import ChangeCategory
     "category,expected",
     [
         (ChangeCategory.PANEL_RELOCATION, "moved"),
+        (ChangeCategory.DEVICE_RELOCATION, "moved"),
         (ChangeCategory.DEVICE_ADDED, "added"),
         (ChangeCategory.DEVICE_REMOVED, "removed"),
         (ChangeCategory.CIRCUIT_REROUTE, "modified"),
         (ChangeCategory.DEVICE_MODIFIED, "modified"),
-        (ChangeCategory.CONDUIT_RUN_CHANGE, "modified"),
         (ChangeCategory.SCHEDULE_LABEL_EDIT, "modified"),
         (ChangeCategory.ANNOTATION_ONLY, "modified"),
         (ChangeCategory.OTHER, "modified"),

@@ -1,0 +1,19 @@
+{
+  "alerts": [
+    {
+      "change_type": "moved",
+      "required_entities": ["P-2"],
+      "confidence_tier": "high"
+    },
+    {
+      "change_type": "added",
+      "required_entities": ["O5"],
+      "confidence_tier": "high"
+    },
+    {
+      "change_type": "added",
+      "required_entities": ["O6"],
+      "confidence_tier": "high"
+    }
+  ]
+}

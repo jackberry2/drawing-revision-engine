@@ -1,0 +1,43 @@
+{
+  "sheet_number": "E-201",
+  "old_revision": "3",
+  "new_revision": "4",
+  "expected_flagged_changes": [
+    {
+      "change_type": "moved",
+      "description": "Panel P-2 relocated approximately 8ft north (bottom-left to top-left of Office A)",
+      "confidence_tier": "high",
+      "confidence_percentage": 95,
+      "impact_note": "All existing circuit home runs (C1, C2, C4) require rerouting from new panel location — re-measure conduit lengths for takeoff. Circuit C3 also requires rerouting due to new wall (see separate entry)."
+    },
+    {
+      "change_type": "modified",
+      "description": "New wall added in Office B, forcing circuit C3's conduit run to reroute around it",
+      "confidence_tier": "high",
+      "confidence_percentage": 92,
+      "impact_note": "Conduit reroute required for C3"
+    },
+    {
+      "change_type": "added",
+      "description": "Outlet O5 added in Office A on new circuit C5",
+      "confidence_tier": "high",
+      "confidence_percentage": 97,
+      "impact_note": "New circuit C5 added"
+    },
+    {
+      "change_type": "added",
+      "description": "Outlet O6 added in Office B on new circuit C6",
+      "confidence_tier": "high",
+      "confidence_percentage": 97,
+      "impact_note": "New circuit C6 added"
+    },
+    {
+      "change_type": "modified",
+      "description": "Panel P-2 schedule updated to add circuits C5 and C6",
+      "confidence_tier": "medium",
+      "confidence_percentage": 85,
+      "impact_note": "Verify panel capacity for added circuits"
+    }
+  ],
+  "notes_for_evaluation": "The panel move (item 1) should come back as ONE bundled alert covering all downstream circuits (C1, C2, C4), not as separate alerts per circuit. C3's reroute is a distinct root cause (new wall) and should stay as its own item."
+}

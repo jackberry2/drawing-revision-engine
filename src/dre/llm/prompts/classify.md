@@ -6,9 +6,20 @@ context.
 For each raw detection, produce one `ClassifiedChange`:
 
 - `category`: pick the trade-relevant category that best fits — panel
-  relocation, circuit reroute, device added, device removed, device modified,
-  conduit run change, schedule/label edit, annotation-only (text/notes/
-  dimensions with no electrical effect), or noise/non-material.
+  relocation, device relocation (a device or piece of equipment — not a
+  panel — physically moved to a different position; use this whenever the
+  thing that moved isn't itself a panel), circuit reroute (this includes any
+  conduit run/path change, not just a full reroute), device added, device
+  removed, device modified (a device stayed in place but something about it
+  changed — type, rating, orientation — short of moving), schedule/label
+  edit, annotation-only (text/notes/dimensions with no electrical effect),
+  or noise/non-material. Use exactly one of these values — never invent a
+  variant spelling. Category by the electrical consequence, not by the
+  non-electrical cause: a new wall or partition appearing on the drawing is
+  not itself an electrical change, so don't classify it as `device_added`.
+  If it forces a circuit's conduit to reroute, the classified change you
+  emit is that circuit's `circuit_reroute` — the wall is context you
+  mention in `trade_description`, not the category driver.
 - `is_material` + `materiality_reason`: this is the most important judgment
   you make here. Ask: **would an experienced electrical estimator reviewing
   this revision actually flag it, or is it scan noise / redraw jitter / a
@@ -21,6 +32,23 @@ For each raw detection, produce one `ClassifiedChange`:
   the same drawing. Conversely, a small-looking shift that moves a device
   across a wall, a room boundary, or a circuit's routing path IS material —
   judge by electrical/spatial consequence, not by pixel distance.
+  Title block fields — revision number, issue date, drawn-by, sheet
+  number — always change between revisions by definition and are
+  administrative record-keeping, not an electrical design change. Never
+  mark a title block field edit as material, even though it's a real,
+  confidently-detected difference: an estimator does not price a revision
+  number.
+  If a hand-drawn revision cloud, arrow, or note like "VERIFY?" points at a
+  specific location, that is a human reviewer flagging uncertainty about
+  whatever is there — treat the underlying geometric difference at that
+  location as material (`is_material: true`) even if it looks small enough
+  to otherwise dismiss as noise. Don't classify the markup itself as the
+  material thing (an annotation alone doesn't need pricing) — classify the
+  device/circuit/panel difference it's pointing at as material, and let
+  materiality_reason say the shift is genuinely ambiguous rather than
+  confidently real or confidently nothing. Confidence scoring, not this
+  step, is where that ambiguity gets reflected as a low score — don't
+  resolve the ambiguity here by silently dropping it as noise.
 - `trade_description`: describe this single change in plain electrical-trade
   language (panel, circuit, conduit, device, tag terminology) — never in
   terms of coordinates or geometry.
