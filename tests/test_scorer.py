@@ -74,3 +74,51 @@ def test_wrong_change_type_fails():
     assert not score.passed
     assert len(score.missed) == 1
     assert len(score.hallucinated) == 1
+
+
+def test_change_type_accepts_a_list_of_acceptable_values():
+    alerts = [_alert("modified", "DS-2 shift, unconfirmed, VERIFY note present.", entities=["DS-2"])]
+    expected = ExpectedCase(
+        alerts=[ExpectedAlert(change_type=["moved", "modified"], required_entities=["DS-2"])]
+    )
+    score = score_case("case_x", alerts, expected)
+    assert score.passed
+
+
+def test_optional_alert_present_and_valid_does_not_fail_the_case():
+    alerts = [
+        _alert("added", "O5 added.", entities=["O5"]),
+        _alert("modified", "C3 reroute around new wall.", entities=["C3"]),
+    ]
+    expected = ExpectedCase(
+        alerts=[ExpectedAlert(change_type="added", required_entities=["O5"])],
+        optional_alerts=[ExpectedAlert(change_type="modified", required_entities=["C3"])],
+    )
+    score = score_case("case_x", alerts, expected)
+    assert score.passed
+    assert score.accepted_optional == ["C3 reroute around new wall."]
+
+
+def test_optional_alert_absent_does_not_fail_the_case():
+    alerts = [_alert("added", "O5 added.", entities=["O5"])]
+    expected = ExpectedCase(
+        alerts=[ExpectedAlert(change_type="added", required_entities=["O5"])],
+        optional_alerts=[ExpectedAlert(change_type="modified", required_entities=["C3"])],
+    )
+    score = score_case("case_x", alerts, expected)
+    assert score.passed
+    assert score.accepted_optional == []
+
+
+def test_optional_alert_present_but_invalid_still_fails():
+    alerts = [
+        _alert("added", "O5 added.", entities=["O5"]),
+        _alert("modified", "Something unrelated changed.", entities=[]),
+    ]
+    expected = ExpectedCase(
+        alerts=[ExpectedAlert(change_type="added", required_entities=["O5"])],
+        optional_alerts=[ExpectedAlert(change_type="modified", required_entities=["C3"])],
+    )
+    score = score_case("case_x", alerts, expected)
+    assert not score.passed
+    assert score.hallucinated == ["Something unrelated changed."]

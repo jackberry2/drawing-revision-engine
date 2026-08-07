@@ -15,5 +15,16 @@
       "required_entities": ["O6"],
       "confidence_tier": "high"
     }
+  ],
+  "optional_alerts": [
+    {
+      "change_type": "modified",
+      "required_entities": ["C3"]
+    },
+    {
+      "change_type": "modified",
+      "required_entities": ["C5", "C6"],
+      "description_keywords": ["schedule"]
+    }
   ]
 }

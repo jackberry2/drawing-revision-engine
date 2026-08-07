@@ -83,6 +83,8 @@ def main() -> int:
             mark = "ok    " if m.matched else "MISSED"
             detail = m.actual_description or m.reason
             print(f"    {mark}  expected={m.expected_change_type!r}  {detail}")
+        for description in score.accepted_optional:
+            print(f"    opt   optional alert present and valid: {description!r}")
         for description in score.hallucinated:
             print(f"    EXTRA   unexpected alert: {description!r}")
 

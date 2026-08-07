@@ -7,13 +7,19 @@ captured, with a roughly matching confidence tier and correct bundling
 reasoning — not word-for-word text. Matching is loose on identity (ids are
 regenerated every run) and on wording (keyword/substring checks), strict on
 `change_type` and (when specified) `confidence_tier`.
+
+`optional_alerts` covers changes that are legitimately sometimes their own
+alert and sometimes folded into a bundle's downstream_implications/
+schedule_corroboration (both are individually correct estimator judgment
+calls) — present or absent, neither counts as a failure, but if one does
+appear it must still match its spec or it's a genuine hallucination.
 """
 
 from __future__ import annotations
 
 from typing import Optional, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class MappedAlert(BaseModel):
@@ -44,6 +50,7 @@ class ExpectedAlert(BaseModel):
 
 class ExpectedCase(BaseModel):
     alerts: list[ExpectedAlert]
+    optional_alerts: list[ExpectedAlert] = Field(default_factory=list)
 
 
 class MatchDetail(BaseModel):
@@ -57,6 +64,7 @@ class CaseScore(BaseModel):
     case_id: str
     matches: list[MatchDetail]
     missed: list[ExpectedAlert]
+    accepted_optional: list[str]
     hallucinated: list[str]
 
     @property
@@ -118,5 +126,18 @@ def score_case(case_id: str, actual_alerts: list[MappedAlert], expected: Expecte
                 )
             )
 
+    accepted_optional: list[str] = []
+    for opt in expected.optional_alerts:
+        found = next((a for a in remaining if _alert_matches(a, opt)[0]), None)
+        if found is not None:
+            remaining.remove(found)
+            accepted_optional.append(found.description)
+
     hallucinated = [a.description for a in remaining]
-    return CaseScore(case_id=case_id, matches=matches, missed=missed, hallucinated=hallucinated)
+    return CaseScore(
+        case_id=case_id,
+        matches=matches,
+        missed=missed,
+        accepted_optional=accepted_optional,
+        hallucinated=hallucinated,
+    )
