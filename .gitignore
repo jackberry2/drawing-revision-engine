@@ -6,3 +6,4 @@ data/runs/*
 !data/runs/.gitkeep
 *.egg-info/
 .pytest_cache/
+.DS_Store
