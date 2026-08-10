@@ -13,7 +13,15 @@ def _build_impact_note(change_event: ChangeEvent) -> str | None:
     parts = list(change_event.downstream_implications)
     if change_event.schedule_corroboration:
         parts.append(change_event.schedule_corroboration)
-    return " ".join(parts) if parts else None
+    if not parts:
+        return None
+    normalized = []
+    for part in parts:
+        part = part.strip()
+        if part and part[-1] not in ".!?":
+            part += "."
+        normalized.append(part)
+    return " ".join(normalized)
 
 
 class DescribeStep(PipelineStep):
