@@ -17,11 +17,19 @@ def cli():
 
 @cli.command()
 @click.argument("analysis_request_id")
-def analyze(analysis_request_id: str):
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Run the real pipeline against the real request/images but write nothing to the database.",
+)
+def analyze(analysis_request_id: str, dry_run: bool):
     """Run the pipeline for a real analysis_requests row and write results
     to flagged_changes. Manual equivalent of POST /analyze/{id}."""
-    result = service.analyze_request(analysis_request_id)
+    result = service.analyze_request(analysis_request_id, dry_run=dry_run)
     click.echo(f"run_id: {result['run_id']}")
+    if dry_run:
+        click.echo("DRY RUN - nothing written to the database")
     if not result["alerts"]:
         click.echo("No material changes detected.")
         return
@@ -36,7 +44,12 @@ def analyze(analysis_request_id: str):
         if alert.get("impact_note"):
             click.echo(f"  impact: {alert['impact_note']}")
     click.echo("")
-    click.echo(f"Wrote {len(result['flagged_change_ids'])} row(s) to flagged_changes.")
+    if dry_run:
+        click.echo(f"Would write {len(result['would_write_to_flagged_changes'])} row(s):")
+        for row in result["would_write_to_flagged_changes"]:
+            click.echo(f"  {row}")
+    else:
+        click.echo(f"Wrote {len(result['flagged_change_ids'])} row(s) to flagged_changes.")
 
 
 @cli.command()

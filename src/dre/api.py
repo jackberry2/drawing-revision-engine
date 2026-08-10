@@ -14,9 +14,11 @@ app = FastAPI(title="Drawing Revision Engine")
 
 
 @app.post("/analyze/{analysis_request_id}")
-def analyze(analysis_request_id: str) -> dict:
+def analyze(analysis_request_id: str, dry_run: bool = False) -> dict:
+    """dry_run=true runs the real pipeline against the real request/images
+    but skips every database write — use it to preview output first."""
     try:
-        return service.analyze_request(analysis_request_id)
+        return service.analyze_request(analysis_request_id, dry_run=dry_run)
     except Exception as exc:  # noqa: BLE001 - surfaced to the caller as a 500 with detail
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 

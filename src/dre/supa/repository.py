@@ -13,9 +13,9 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
-import httpx
 from pydantic import BaseModel
 
+from dre import config
 from dre.models.schemas import ChangeEvent
 from dre.supa.client import get_client
 
@@ -55,9 +55,13 @@ def get_drawing(drawing_id: str) -> dict:
 
 
 def download_drawing_image(drawing: dict, dest_path: Path) -> Path:
-    response = httpx.get(drawing["file_url"], follow_redirects=True, timeout=60.0)
-    response.raise_for_status()
-    dest_path.write_bytes(response.content)
+    """`drawings.file_path` is a path inside the (private) drawings Storage
+    bucket, not a directly-fetchable URL — download it via the Storage API
+    using the service role key, which bypasses bucket RLS."""
+    data = get_client().storage.from_(config.SUPABASE_DRAWINGS_BUCKET).download(
+        drawing["file_path"]
+    )
+    dest_path.write_bytes(data)
     return dest_path
 
 
@@ -130,6 +134,7 @@ def save_flagged_change(
     *,
     project_id: str,
     drawing_id: Optional[str],
+    analysis_request_id: Optional[str],
     sheet_number: str,
     change_type: str,
     description: str,
@@ -143,6 +148,7 @@ def save_flagged_change(
             "id": flagged_change_id,
             "project_id": project_id,
             "drawing_id": drawing_id,
+            "analysis_request_id": analysis_request_id,
             "sheet_number": sheet_number,
             "change_type": change_type,
             "description": description,
@@ -210,16 +216,11 @@ def record_human_review(
 
 
 def get_flagged_changes_for_analysis_request(analysis_request_id: str) -> list[dict]:
-    """flagged_changes has no analysis_request_id column, so we key off
-    drawing_id — the service always writes new alerts with
-    drawing_id = new_drawing_id (see dre.service), which uniquely identifies
-    the analysis run's output for that sheet revision."""
-    analysis_request = get_analysis_request(analysis_request_id)
     resp = (
         get_client()
         .table("flagged_changes")
         .select("*")
-        .eq("drawing_id", analysis_request["new_drawing_id"])
+        .eq("analysis_request_id", analysis_request_id)
         .execute()
     )
     return resp.data

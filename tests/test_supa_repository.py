@@ -9,6 +9,26 @@ from dre.models.schemas import ChangeCategory, ChangeEvent, EntityRef
 from dre.supa import repository as repo
 
 
+class FakeBucket:
+    def __init__(self, expected_path: str, data: bytes):
+        self.expected_path = expected_path
+        self.data = data
+        self.requested_paths: list[str] = []
+
+    def download(self, path: str) -> bytes:
+        self.requested_paths.append(path)
+        assert path == self.expected_path
+        return self.data
+
+
+class FakeStorage:
+    def __init__(self, bucket: FakeBucket):
+        self.bucket = bucket
+
+    def from_(self, bucket_name: str) -> FakeBucket:
+        return self.bucket
+
+
 class FakeQuery:
     def __init__(self, table_name: str, recorder: "FakeClient"):
         self.table_name = table_name
@@ -51,6 +71,7 @@ def test_save_flagged_change_matches_real_table_columns():
         repo.save_flagged_change(
             project_id="proj-1",
             drawing_id="drawing-2",
+            analysis_request_id="ar-1",
             sheet_number="E-201",
             change_type="moved",
             description="Panel LP-2 relocated.",
@@ -68,6 +89,7 @@ def test_save_flagged_change_matches_real_table_columns():
         "id",
         "project_id",
         "drawing_id",
+        "analysis_request_id",
         "sheet_number",
         "change_type",
         "description",
@@ -122,6 +144,24 @@ def test_record_human_review_confirmed_marks_flagged_change_reviewed():
 
     assert [t for t, _ in fake.inserts] == ["human_reviews"]
     assert fake.updates == [("flagged_changes", {"reviewed": True})]
+
+
+def test_download_drawing_image_uses_storage_api_not_direct_url(tmp_path):
+    """drawings.file_path is a path inside a private Storage bucket, not a
+    fetchable URL - download must go through client.storage, not httpx."""
+    bucket = FakeBucket(
+        expected_path="proj-1/E-201/123-E-201.png", data=b"\x89PNG fake image bytes"
+    )
+    fake = SimpleNamespace(storage=FakeStorage(bucket))
+    drawing = {"id": "drawing-1", "file_path": "proj-1/E-201/123-E-201.png"}
+    dest = tmp_path / "old.png"
+
+    with patch("dre.supa.repository.get_client", return_value=fake):
+        result_path = repo.download_drawing_image(drawing, dest)
+
+    assert result_path == dest
+    assert dest.read_bytes() == b"\x89PNG fake image bytes"
+    assert bucket.requested_paths == ["proj-1/E-201/123-E-201.png"]
 
 
 def test_record_human_review_false_positive_does_not_mark_reviewed():
