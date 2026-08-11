@@ -6,11 +6,29 @@ Lovable app (deliberately deferred) — run standalone with:
 
 from __future__ import annotations
 
+import os
+
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
 from dre import service
 
 app = FastAPI(title="Drawing Revision Engine")
+
+# Only needed if the Lovable frontend calls this API directly from the
+# browser (client-side fetch) rather than through a server-side proxy. Set
+# ALLOWED_ORIGINS to a comma-separated list of exact origins (e.g.
+# "https://your-app.lovable.app,https://yourdomain.com") to lock this down;
+# defaults to allow-all since this endpoint is already gated by knowing a
+# real analysis_request_id and by the service role key server-side, not by
+# origin.
+_allowed_origins = os.environ.get("ALLOWED_ORIGINS", "*")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"] if _allowed_origins == "*" else _allowed_origins.split(","),
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.post("/analyze/{analysis_request_id}")
