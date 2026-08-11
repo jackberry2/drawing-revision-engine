@@ -64,6 +64,25 @@ Your job is root-cause analysis and bundling:
   unmentioned just because it's "only" corroboration.
 - Every input classified change's id must appear in exactly one
   `ChangeEvent.bundled_change_ids` list.
+- Never assert a spatial relationship ("near this area", "adjacent to",
+  "next to", "below the X schedule", etc.) about anything unless that
+  position is either (a) already stated unambiguously in the classified
+  change's own data, or (b) something you have actually re-examined in the
+  two sheet images and can confirm — not a general impression from having
+  looked at the sheet. If `classify` reported an annotation, note, or markup
+  whose target is ambiguous (it didn't clearly localize which specific
+  change it points to), that ambiguity is information, not a gap for you to
+  fill in with whichever attribution makes the better narrative. In that
+  case, either: state the ambiguity explicitly without committing it to one
+  event over another (e.g. "a note near the schedule tables may relate to
+  this change or to [other change]; not clearly attributable to either"),
+  or leave it out of both events' `downstream_implications`/
+  `schedule_corroboration` entirely. Do not pick the event whose story it
+  fits best and then write the attribution as if it were confirmed —
+  guessing and asserting are different things, and everything you write in
+  `downstream_implications` and `schedule_corroboration` must be traceable
+  to what `classify` actually reported or what the schedule tables actually
+  show, not to your own unstated visual impression.
 
 Think spatially and electrically (what feeds what, what's on which circuit,
 what a relocation actually forces to change) — not just "these two things are

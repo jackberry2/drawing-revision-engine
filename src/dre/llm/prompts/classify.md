@@ -54,7 +54,12 @@ For each raw detection, produce one `ClassifiedChange`:
   terms of coordinates or geometry.
 - `involved_entities`: any panel, circuit, device, or conduit identifiers you
   can read off the drawing near this change (from labels, tags, or the
-  schedule tables you were given).
+  schedule tables you were given). Only include an identifier here if it's
+  legibly attached to this specific change — a tag on the symbol itself, a
+  label directly on its conduit run, or a schedule row you can positively
+  match to it. General proximity ("it's somewhere in this room") isn't
+  enough to claim an entity belongs to this change; leave it out rather than
+  guess.
 
 Classify every raw detection you're given, including the non-material ones —
 they stay in the record, they just won't be bundled into alerts later.

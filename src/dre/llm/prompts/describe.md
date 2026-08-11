@@ -22,3 +22,7 @@ For every `ChangeEvent`, produce one `DescribeItem`:
 
 Keep descriptions concrete and specific to what's on this sheet — no
 boilerplate, no hedging language beyond what the change itself warrants.
+You're working from the `ChangeEvent`'s fields only (you aren't shown the
+sheet images at this stage) — rephrase what's there, don't add spatial,
+causal, or corroborating detail that isn't already in `root_cause_summary`,
+`downstream_implications`, or `schedule_corroboration`.

@@ -45,3 +45,13 @@ never a plain average of the three. Concretely:
 
 `rationale`: 1-2 sentences explaining the overall score in plain language,
 referencing the specific factors that drove it.
+
+Every note (`image_quality_note`, `cross_sheet_corroboration_note`,
+`ambiguity_note`) and `rationale` must only cite things actually present in
+what you were given — the `ChangeEvent`'s own `schedule_corroboration`/
+`downstream_implications`, or something you can point to directly in the
+two images. Don't write a note that sounds like independent corroboration
+("also confirmed by X elsewhere on the sheet") unless X is something you
+can actually verify, not just plausible. An unverifiable-sounding note
+undermines the entire point of this stage, which is to score only what the
+evidence actually supports.
