@@ -9,5 +9,9 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 SUPABASE_DRAWINGS_BUCKET = os.environ.get("DRE_DRAWINGS_BUCKET", "drawings")
 
+# Required to call POST /analyze/{id} — see dre.api. Not the same as the
+# third-party secrets above; this is a key *we* issue to callers (Lovable).
+DRE_API_KEY = os.environ.get("DRE_API_KEY", "")
+
 DETECT_MODEL = os.environ.get("DRE_DETECT_MODEL", "claude-sonnet-5")
 REASONING_MODEL = os.environ.get("DRE_REASONING_MODEL", "claude-sonnet-5")

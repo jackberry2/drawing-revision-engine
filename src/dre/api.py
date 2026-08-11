@@ -7,11 +7,12 @@ Lovable app (deliberately deferred) — run standalone with:
 from __future__ import annotations
 
 import os
+import secrets
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from dre import service
+from dre import config, service
 
 app = FastAPI(title="Drawing Revision Engine")
 
@@ -31,7 +32,15 @@ app.add_middleware(
 )
 
 
-@app.post("/analyze/{analysis_request_id}")
+def require_api_key(x_api_key: str = Header(default="")) -> None:
+    if not config.DRE_API_KEY:
+        # Fail closed: an unset key must never mean "let everyone through".
+        raise HTTPException(status_code=500, detail="DRE_API_KEY is not configured on the server")
+    if not secrets.compare_digest(x_api_key, config.DRE_API_KEY):
+        raise HTTPException(status_code=401, detail="Missing or invalid X-API-Key")
+
+
+@app.post("/analyze/{analysis_request_id}", dependencies=[Depends(require_api_key)])
 def analyze(analysis_request_id: str, dry_run: bool = False) -> dict:
     """dry_run=true runs the real pipeline against the real request/images
     but skips every database write — use it to preview output first."""

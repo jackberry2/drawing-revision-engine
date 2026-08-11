@@ -35,7 +35,7 @@ permanent wrapper around a hosted vision API. So:
 cd ~/Documents/drawing-revision-engine
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-cp .env.example .env   # fill in ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+cp .env.example .env   # fill in ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, DRE_API_KEY
 ```
 
 Apply the additive migration for the proprietary logging tables (this
@@ -66,6 +66,10 @@ linked `pipeline_change_events` row, and sets
 `analysis_requests.status = "in_review"`. It is **not** yet wired to the
 "Analyze Changes" button in the app — that trigger is a separate, later step.
 
+Requires an `X-API-Key` header matching `DRE_API_KEY` — this is a key *we*
+issue to callers (Lovable), separate from the third-party secrets above.
+`/health` does not require it.
+
 ## Eval cases
 
 Drop your three validated test cases into `evals/cases/<case_id>/` as
@@ -78,7 +82,7 @@ every iteration while you tune the prompts.
 
 ```
 src/dre/
-  config.py          env/config (ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+  config.py          env/config (ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, DRE_API_KEY)
   api.py             FastAPI app: POST /analyze/{analysis_request_id}
   service.py          shared analyze_request() core used by the API and the CLI
   mapping.py          ChangeCategory -> change_type, confidence score -> tier/percentage
