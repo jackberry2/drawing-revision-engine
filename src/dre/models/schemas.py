@@ -122,7 +122,31 @@ class ReasonResponse(BaseModel):
 # ---- Stage 4: confidence ---------------------------------------------------
 
 
+class ConfidenceFactors(BaseModel):
+    """What the LLM itself assesses. Deliberately excludes the overall
+    `score` — that's synthesized deterministically in code from these three
+    factors (see `pipeline/confidence.py`), not computed by the model, so
+    the same three judgments always produce the same final score regardless
+    of sampling variance in how the model would narrate the synthesis."""
+
+    change_event_id: str
+    image_quality_factor: float = Field(..., ge=0.0, le=1.0)
+    image_quality_note: str
+    cross_sheet_corroboration_factor: float = Field(..., ge=0.0, le=1.0)
+    cross_sheet_corroboration_note: str
+    ambiguity_factor: float = Field(..., ge=0.0, le=1.0)
+    ambiguity_note: str
+    rationale: str = Field(..., description="Human-readable summary of the three factor assessments.")
+
+
+class ConfidenceResponse(BaseModel):
+    assessments: list[ConfidenceFactors]
+
+
 class ConfidenceScore(BaseModel):
+    """The final, usable confidence — ConfidenceFactors plus the
+    deterministically-computed `score`."""
+
     change_event_id: str
     score: float = Field(..., ge=0.0, le=1.0)
     image_quality_factor: float = Field(..., ge=0.0, le=1.0)
@@ -131,11 +155,7 @@ class ConfidenceScore(BaseModel):
     cross_sheet_corroboration_note: str
     ambiguity_factor: float = Field(..., ge=0.0, le=1.0)
     ambiguity_note: str
-    rationale: str = Field(..., description="Human-readable synthesis of the three factors.")
-
-
-class ConfidenceResponse(BaseModel):
-    scores: list[ConfidenceScore]
+    rationale: str = Field(..., description="Human-readable summary of the three factor assessments.")
 
 
 # ---- Stage 5: describe -----------------------------------------------------

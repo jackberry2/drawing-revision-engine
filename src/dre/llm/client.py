@@ -12,7 +12,7 @@ import base64
 import json
 import mimetypes
 from pathlib import Path
-from typing import Type, TypeVar
+from typing import Optional, Type, TypeVar
 
 import anthropic
 from pydantic import BaseModel, ValidationError
@@ -58,12 +58,19 @@ def call_structured(
     model: str = config.REASONING_MODEL,
     max_tokens: int = 8192,
     max_attempts: int = 3,
+    temperature: Optional[float] = None,
 ) -> T:
     """Call Claude with a forced tool-use call shaped by `response_model`,
     returning a validated instance of it. Retries the call itself (not just
     the parse) on a malformed tool payload — an occasional model quirk on
     larger/nested schemas, not something a client-side fix can guarantee
-    against, but re-sampling reliably clears it."""
+    against, but re-sampling reliably clears it.
+
+    `temperature` is omitted from the request unless explicitly passed —
+    `claude-sonnet-5` (the current default model) rejects the parameter
+    entirely with a 400 ("temperature is deprecated for this model"), so
+    this can't be used as a consistency lever against that model. Left in
+    place for models that do support it."""
     tool_name = f"emit_{response_model.__name__.lower()}"
     tool = {
         "name": tool_name,
@@ -71,16 +78,20 @@ def call_structured(
         "input_schema": response_model.model_json_schema(),
     }
 
+    create_kwargs = dict(
+        model=model,
+        max_tokens=max_tokens,
+        system=system,
+        tools=[tool],
+        tool_choice={"type": "tool", "name": tool_name},
+        messages=[{"role": "user", "content": user_content}],
+    )
+    if temperature is not None:
+        create_kwargs["temperature"] = temperature
+
     last_error: Exception | None = None
     for attempt in range(1, max_attempts + 1):
-        response = get_client().messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            system=system,
-            tools=[tool],
-            tool_choice={"type": "tool", "name": tool_name},
-            messages=[{"role": "user", "content": user_content}],
-        )
+        response = get_client().messages.create(**create_kwargs)
 
         tool_block = next(
             (b for b in response.content if b.type == "tool_use" and b.name == tool_name), None
