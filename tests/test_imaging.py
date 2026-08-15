@@ -105,6 +105,31 @@ def test_rasterize_large_sheet_stays_within_bounded_pixel_dimensions():
         assert max(img.width, img.height) <= 2000
 
 
+def test_default_max_dimension_matches_claude_high_resolution_tier_ceiling():
+    """2576px is Claude 4.7+'s (claude-sonnet-5, this pipeline's default
+    model) actual native long-edge ceiling per Anthropic's vision docs — not
+    an arbitrary safety margin. An earlier version of this default (2000)
+    was below that ceiling, throwing away resolution the model could
+    already use for free. Sending anything past 2576 buys nothing since
+    Claude resizes down server-side regardless, so the default should sit
+    exactly at that number, not above or below it."""
+    import fitz
+
+    doc = fitz.open()
+    doc.new_page(width=50 * 72, height=36 * 72)
+    large_pdf_bytes = doc.tobytes()
+    doc.close()
+
+    png_bytes = rasterize_pdf_first_page_to_png(large_pdf_bytes)
+
+    import io
+
+    from PIL import Image
+
+    with Image.open(io.BytesIO(png_bytes)) as img:
+        assert max(img.width, img.height) == 2576
+
+
 def test_normalize_drawing_bytes_rasterizes_pdf():
     image_bytes, media_type = normalize_drawing_bytes(_real_pdf_bytes())
     assert media_type == "image/png"

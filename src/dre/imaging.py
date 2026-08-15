@@ -58,7 +58,7 @@ def extension_for_media_type(media_type: str) -> str:
     return _EXTENSION_BY_MEDIA_TYPE[media_type]
 
 
-def rasterize_pdf_first_page_to_png(pdf_bytes: bytes, *, max_dimension: int = 2000) -> bytes:
+def rasterize_pdf_first_page_to_png(pdf_bytes: bytes, *, max_dimension: int = 2576) -> bytes:
     """Drawing sheets are exported as single-page PDFs in practice; only the
     first page is used. Requires PyMuPDF (pure-pip, no system Poppler
     dependency — matters for a plain `pip install` deploy target).
@@ -70,12 +70,25 @@ def rasterize_pdf_first_page_to_png(pdf_bytes: bytes, *, max_dimension: int = 20
     request came back 502, and even /health started failing right after,
     recovering only once the platform restarted the crashed process).
     Large-format sheets are the norm for this application, not an edge
-    case, so a fixed DPI was never going to be memory-safe. This also isn't
-    a quality tradeoff: Claude's vision API resizes images server-side to
-    roughly 1568px on the long edge regardless of what's uploaded, so
-    rendering far beyond that bought nothing — 2000px keeps a little
-    headroom above that ceiling without paying for pixels the model
-    discards anyway.
+    case, so a fixed DPI was never going to be memory-safe.
+
+    2576px is not an arbitrary safety margin — per Anthropic's vision docs
+    (platform.claude.com/docs/en/build-with-claude/vision), Claude 4.7+
+    models (this pipeline's DETECT_MODEL/REASONING_MODEL default,
+    claude-sonnet-5, qualifies) get the "high-resolution" tier: images are
+    used natively up to 2576px on the long edge / 4784 visual tokens before
+    Claude resizes them down server-side. Sending less than that (an
+    earlier version of this function capped at 2000px, based on an
+    unverified assumption about a lower, older-tier limit) throws away
+    resolution the model can actually use for free; sending more only adds
+    memory/bandwidth cost for pixels Claude discards on its end anyway.
+
+    This still isn't enough to reliably preserve small print on real
+    full-size sheets — a 50"-wide sheet at 2576px is only ~51 DPI
+    equivalent, well under what's needed for 6-8pt architectural callouts
+    — but that's a fundamental single-full-page-image ceiling, not
+    something raising this constant further can fix. See
+    docs/pipeline_notes.md for the tiled-analysis discussion.
     """
     import fitz  # PyMuPDF — imported lazily so it's only required when a PDF actually shows up
 
