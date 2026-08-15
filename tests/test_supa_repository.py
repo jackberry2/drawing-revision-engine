@@ -101,6 +101,48 @@ def test_save_flagged_change_matches_real_table_columns():
     assert payload["confidence_percentage"] == 95
 
 
+def test_create_pipeline_run_supports_single_sheet_mode():
+    fake = FakeClient()
+    with patch("dre.supa.repository.get_client", return_value=fake):
+        repo.create_pipeline_run(
+            analysis_request_id="ar-1",
+            old_drawing_id="drawing-1",
+            new_drawing_id=None,
+            mode="single_sheet",
+        )
+
+    table_name, payload = fake.inserts[0]
+    assert table_name == "pipeline_runs"
+    assert payload["new_drawing_id"] is None
+    assert payload["mode"] == "single_sheet"
+
+
+def test_save_pipeline_change_event_includes_schedule_consistency_and_identity_unresolved():
+    fake = FakeClient()
+    change_event = ChangeEvent(
+        id="ce_1",
+        root_cause_change_id="cc_1",
+        bundled_change_ids=["cc_1"],
+        category=ChangeCategory.DEVICE_ADDED,
+        root_cause_summary="Unlabeled symbol flagged with a revision cloud.",
+        schedule_consistency=None,
+        identity_unresolved=True,
+    )
+    with patch("dre.supa.repository.get_client", return_value=fake):
+        repo.save_pipeline_change_event(
+            run_id="run-1",
+            flagged_change_id="fc-1",
+            change_event=change_event,
+            confidence_score=0.2,
+            confidence_rationale={"rationale": "unresolved identity"},
+        )
+
+    table_name, payload = fake.inserts[0]
+    assert table_name == "pipeline_change_events"
+    assert payload["identity_unresolved"] is True
+    assert payload["schedule_consistency"] is None
+
+
 def test_log_step_serializes_pydantic_models_to_plain_json():
     fake = FakeClient()
     change_event = ChangeEvent(

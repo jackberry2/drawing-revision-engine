@@ -13,7 +13,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional, Protocol
+from typing import Any, Literal, Optional, Protocol
 
 from dre.models.schemas import (
     ChangeEvent,
@@ -21,6 +21,7 @@ from dre.models.schemas import (
     ConfidenceScore,
     DetectResult,
     FinalChangeAlert,
+    SingleSheetDetectResult,
 )
 
 
@@ -28,10 +29,14 @@ from dre.models.schemas import (
 class PipelineContext:
     run_id: str
     old_image_path: Path
-    new_image_path: Path
+    mode: Literal["two_image", "single_sheet"] = "two_image"
+    # Required in two_image mode, always None in single_sheet mode (there is
+    # only one image — old_image_path holds it either way).
+    new_image_path: Optional[Path] = None
     sheet_ref: Optional[str] = None
 
     detect_result: Optional[DetectResult] = None
+    detect_single_result: Optional[SingleSheetDetectResult] = None
     classified_changes: list[ClassifiedChange] = field(default_factory=list)
     change_events: list[ChangeEvent] = field(default_factory=list)
     confidence_scores: dict[str, ConfidenceScore] = field(default_factory=dict)

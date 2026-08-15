@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from dre import config
 from dre.llm.client import call_structured, dump_models, encode_image, load_prompt
-from dre.models.schemas import ConfidenceFactors, ConfidenceResponse, ConfidenceScore
+from dre.models.schemas import ChangeEvent, ConfidenceFactors, ConfidenceResponse, ConfidenceScore
 from dre.pipeline.base import PipelineContext, PipelineStep
+from dre.pipeline.classify import SINGLE_SHEET_NOTE
 
 # Note: temperature is NOT used as a consistency lever here. claude-sonnet-5
 # (the current model) rejects the parameter outright (400 "temperature is
@@ -23,6 +24,20 @@ _LOW_AMBIGUITY_CUTOFF = 0.5
 _CLEAR_AMBIGUITY_CUTOFF = 0.93
 _CLEAR_IMAGE_QUALITY_CUTOFF = 0.9
 _NEUTRAL_CORROBORATION = 0.5
+
+# Single-sheet mode structural ceiling (see docs/single_sheet_mode_findings.md
+# #2): the underlying evidence is inherently weaker than a verified pixel
+# difference — trusting the drafter's markup being complete and accurate,
+# not an independently-detected change. Clamped in code, not left to the
+# model to self-report lower factors, for the same reason the confidence
+# math itself moved out of the model's hands: a guarantee that has to hold
+# shouldn't depend on the model consistently choosing to honor it.
+_SINGLE_SHEET_AMBIGUITY_CEILING = 0.85
+_SINGLE_SHEET_CORROBORATION_CEILING = 0.7
+# identity_unresolved forces ambiguity below the low-cutoff outright — an
+# item whose identity can't even be pinned down is never "textbook clear",
+# regardless of how the model itself scored it.
+_UNRESOLVED_IDENTITY_AMBIGUITY_CAP = 0.3
 
 
 def synthesize_score(
@@ -46,6 +61,10 @@ def synthesize_score(
     - Otherwise, a weighted blend with ambiguity dominant; corroboration
       only pulls the score down when it's actually below neutral
       (conflicting), never merely absent.
+
+    Callers apply mode-specific clamps to the inputs (see
+    `_apply_mode_ceiling`) before calling this — this function itself has no
+    notion of "mode", only of the three factors it's given.
     """
     if ambiguity_factor < _LOW_AMBIGUITY_CUTOFF:
         score = 0.25 + 0.5 * ambiguity_factor
@@ -70,20 +89,52 @@ def synthesize_score(
     return round(min(max(score, 0.0), 1.0), 4)
 
 
-def _to_confidence_score(factors: ConfidenceFactors) -> ConfidenceScore:
-    score = synthesize_score(
+def apply_mode_ceiling(
+    *,
+    image_quality_factor: float,
+    cross_sheet_corroboration_factor: float,
+    ambiguity_factor: float,
+    mode: str,
+    identity_unresolved: bool,
+) -> tuple[float, float, float]:
+    """Clamps the model-reported factors before synthesis. single_sheet mode
+    can never reach the two-image ceiling regardless of how clean the
+    markup is; identity_unresolved items can never be "textbook clear"
+    regardless of mode. image_quality_factor is untouched — scan quality is
+    a real, independently-assessable property either way."""
+    if mode == "single_sheet":
+        ambiguity_factor = min(ambiguity_factor, _SINGLE_SHEET_AMBIGUITY_CEILING)
+        cross_sheet_corroboration_factor = min(
+            cross_sheet_corroboration_factor, _SINGLE_SHEET_CORROBORATION_CEILING
+        )
+    if identity_unresolved:
+        ambiguity_factor = min(ambiguity_factor, _UNRESOLVED_IDENTITY_AMBIGUITY_CAP)
+    return image_quality_factor, cross_sheet_corroboration_factor, ambiguity_factor
+
+
+def _to_confidence_score(
+    factors: ConfidenceFactors, *, mode: str, identity_unresolved: bool
+) -> ConfidenceScore:
+    image_quality_factor, cross_sheet_corroboration_factor, ambiguity_factor = apply_mode_ceiling(
         image_quality_factor=factors.image_quality_factor,
         cross_sheet_corroboration_factor=factors.cross_sheet_corroboration_factor,
         ambiguity_factor=factors.ambiguity_factor,
+        mode=mode,
+        identity_unresolved=identity_unresolved,
+    )
+    score = synthesize_score(
+        image_quality_factor=image_quality_factor,
+        cross_sheet_corroboration_factor=cross_sheet_corroboration_factor,
+        ambiguity_factor=ambiguity_factor,
     )
     return ConfidenceScore(
         change_event_id=factors.change_event_id,
         score=score,
-        image_quality_factor=factors.image_quality_factor,
+        image_quality_factor=image_quality_factor,
         image_quality_note=factors.image_quality_note,
-        cross_sheet_corroboration_factor=factors.cross_sheet_corroboration_factor,
+        cross_sheet_corroboration_factor=cross_sheet_corroboration_factor,
         cross_sheet_corroboration_note=factors.cross_sheet_corroboration_note,
-        ambiguity_factor=factors.ambiguity_factor,
+        ambiguity_factor=ambiguity_factor,
         ambiguity_note=factors.ambiguity_note,
         rationale=factors.rationale,
     )
@@ -95,8 +146,8 @@ class ConfidenceStep(PipelineStep):
     swapped independently (e.g. replaced by a calibrated model trained on
     `human_reviews` corrections later). The model only assesses the three
     underlying factors; the final score is computed deterministically from
-    them (see `synthesize_score`), and runs at low temperature since this
-    stage is judgment/scoring, not narrative.
+    them (see `synthesize_score`), with a mode/identity_unresolved ceiling
+    clamp applied first (see `apply_mode_ceiling`).
     """
 
     name = "confidence"
@@ -111,19 +162,35 @@ class ConfidenceStep(PipelineStep):
             ctx.confidence_scores = {}
             return []
 
-        user_content = [
-            {"type": "text", "text": "Change events (JSON):\n" + dump_models(ctx.change_events)},
-            {"type": "text", "text": "OLD revision of the sheet:"},
-            encode_image(ctx.old_image_path),
-            {"type": "text", "text": "NEW revision of the sheet:"},
-            encode_image(ctx.new_image_path),
-        ]
+        if ctx.mode == "single_sheet":
+            user_content = [
+                {"type": "text", "text": "Change events (JSON):\n" + dump_models(ctx.change_events)},
+                {"type": "text", "text": SINGLE_SHEET_NOTE},
+                encode_image(ctx.old_image_path),
+            ]
+        else:
+            assert ctx.new_image_path is not None
+            user_content = [
+                {"type": "text", "text": "Change events (JSON):\n" + dump_models(ctx.change_events)},
+                {"type": "text", "text": "OLD revision of the sheet:"},
+                encode_image(ctx.old_image_path),
+                {"type": "text", "text": "NEW revision of the sheet:"},
+                encode_image(ctx.new_image_path),
+            ]
+
         result = call_structured(
             system=load_prompt("confidence"),
             user_content=user_content,
             response_model=ConfidenceResponse,
             model=self.model_used,
         )
-        scores = [_to_confidence_score(f) for f in result.assessments]
+
+        events_by_id: dict[str, ChangeEvent] = {e.id: e for e in ctx.change_events}
+        scores = []
+        for f in result.assessments:
+            event = events_by_id.get(f.change_event_id)
+            identity_unresolved = event.identity_unresolved if event else False
+            scores.append(_to_confidence_score(f, mode=ctx.mode, identity_unresolved=identity_unresolved))
+
         ctx.confidence_scores = {s.change_event_id: s for s in scores}
         return scores

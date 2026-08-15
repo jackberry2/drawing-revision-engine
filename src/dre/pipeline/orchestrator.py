@@ -35,10 +35,12 @@ class Pipeline:
                 latency_ms=latency_ms,
             )
 
-        assert ctx.detect_result is not None
+        assert ctx.detect_result is not None or ctx.detect_single_result is not None
         return PipelineRunResult(
             run_id=ctx.run_id,
+            mode=ctx.mode,
             detect_result=ctx.detect_result,
+            detect_single_result=ctx.detect_single_result,
             classified_changes=ctx.classified_changes,
             change_events=ctx.change_events,
             alerts=ctx.alerts,

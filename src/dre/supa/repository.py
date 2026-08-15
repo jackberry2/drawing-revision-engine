@@ -75,7 +75,10 @@ def set_analysis_status(analysis_request_id: str, status: str) -> None:
 
 
 def create_pipeline_run(
-    analysis_request_id: str, old_drawing_id: str, new_drawing_id: str
+    analysis_request_id: str,
+    old_drawing_id: str,
+    new_drawing_id: Optional[str] = None,
+    mode: str = "two_image",
 ) -> str:
     run_id = new_id()
     get_client().table("pipeline_runs").insert(
@@ -84,6 +87,7 @@ def create_pipeline_run(
             "analysis_request_id": analysis_request_id,
             "old_drawing_id": old_drawing_id,
             "new_drawing_id": new_drawing_id,
+            "mode": mode,
             "status": "running",
         }
     ).execute()
@@ -177,6 +181,8 @@ def save_pipeline_change_event(
             "bundled_change_ids": change_event.bundled_change_ids,
             "downstream_implications": change_event.downstream_implications,
             "schedule_corroboration": change_event.schedule_corroboration,
+            "schedule_consistency": change_event.schedule_consistency,
+            "identity_unresolved": change_event.identity_unresolved,
             "confidence_score": confidence_score,
             "confidence_rationale": _to_jsonable(confidence_rationale),
         }

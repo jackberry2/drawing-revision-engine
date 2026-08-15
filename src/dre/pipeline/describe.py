@@ -13,6 +13,8 @@ def _build_impact_note(change_event: ChangeEvent) -> str | None:
     parts = list(change_event.downstream_implications)
     if change_event.schedule_corroboration:
         parts.append(change_event.schedule_corroboration)
+    if change_event.schedule_consistency:
+        parts.append(change_event.schedule_consistency)
     if not parts:
         return None
     normalized = []

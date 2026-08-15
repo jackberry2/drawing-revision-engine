@@ -27,7 +27,7 @@ def analyze(analysis_request_id: str, dry_run: bool):
     """Run the pipeline for a real analysis_requests row and write results
     to flagged_changes. Manual equivalent of POST /analyze/{id}."""
     result = service.analyze_request(analysis_request_id, dry_run=dry_run)
-    click.echo(f"run_id: {result['run_id']}")
+    click.echo(f"run_id: {result['run_id']}  (mode: {result['mode']})")
     if dry_run:
         click.echo("DRY RUN - nothing written to the database")
     if not result["alerts"]:
