@@ -188,22 +188,63 @@ def test_record_human_review_confirmed_marks_flagged_change_reviewed():
     assert fake.updates == [("flagged_changes", {"reviewed": True})]
 
 
+_REAL_PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"fake but real-signature png bytes"
+
+
 def test_download_drawing_image_uses_storage_api_not_direct_url(tmp_path):
     """drawings.file_path is a path inside a private Storage bucket, not a
     fetchable URL - download must go through client.storage, not httpx."""
-    bucket = FakeBucket(
-        expected_path="proj-1/E-201/123-E-201.png", data=b"\x89PNG fake image bytes"
-    )
+    bucket = FakeBucket(expected_path="proj-1/E-201/123-E-201.png", data=_REAL_PNG_BYTES)
     fake = SimpleNamespace(storage=FakeStorage(bucket))
     drawing = {"id": "drawing-1", "file_path": "proj-1/E-201/123-E-201.png"}
-    dest = tmp_path / "old.png"
 
     with patch("dre.supa.repository.get_client", return_value=fake):
-        result_path = repo.download_drawing_image(drawing, dest)
+        result_path = repo.download_drawing_image(drawing, tmp_path, "old")
 
-    assert result_path == dest
-    assert dest.read_bytes() == b"\x89PNG fake image bytes"
+    assert result_path == tmp_path / "old.png"
+    assert result_path.read_bytes() == _REAL_PNG_BYTES
     assert bucket.requested_paths == ["proj-1/E-201/123-E-201.png"]
+
+
+def test_download_drawing_image_ignores_file_path_extension_uses_real_content(tmp_path):
+    """A real production bug: drawings.file_path claimed .pdf (correctly, in
+    that case) but the destination filename must be decided from actual
+    downloaded bytes, not the stored path's extension — here a mislabeled
+    .pdf path actually contains PNG bytes, and the real content must win."""
+    bucket = FakeBucket(
+        expected_path="proj-1/E-201/mislabeled.pdf", data=_REAL_PNG_BYTES
+    )
+    fake = SimpleNamespace(storage=FakeStorage(bucket))
+    drawing = {"id": "drawing-1", "file_path": "proj-1/E-201/mislabeled.pdf"}
+
+    with patch("dre.supa.repository.get_client", return_value=fake):
+        result_path = repo.download_drawing_image(drawing, tmp_path, "old")
+
+    assert result_path == tmp_path / "old.png"
+    assert result_path.read_bytes() == _REAL_PNG_BYTES
+
+
+def test_download_drawing_image_rasterizes_real_pdf(tmp_path):
+    """The actual real-world bug report: a genuinely PDF drawing sheet
+    upload must be rasterized to PNG, since Claude's vision API doesn't
+    accept application/pdf as an image content block."""
+    import fitz
+
+    pdf_doc = fitz.open()
+    page = pdf_doc.new_page(width=200, height=100)
+    page.insert_text((10, 50), "TEST SHEET")
+    pdf_bytes = pdf_doc.tobytes()
+    pdf_doc.close()
+
+    bucket = FakeBucket(expected_path="proj-1/E-101.3/sheet.pdf", data=pdf_bytes)
+    fake = SimpleNamespace(storage=FakeStorage(bucket))
+    drawing = {"id": "drawing-1", "file_path": "proj-1/E-101.3/sheet.pdf"}
+
+    with patch("dre.supa.repository.get_client", return_value=fake):
+        result_path = repo.download_drawing_image(drawing, tmp_path, "old")
+
+    assert result_path == tmp_path / "old.png"
+    assert result_path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
 
 
 def test_record_human_review_false_positive_does_not_mark_reviewed():

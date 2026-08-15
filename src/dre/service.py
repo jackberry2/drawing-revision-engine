@@ -31,10 +31,6 @@ from dre.supa import repository as repo
 from dre.supa.repository import SupabaseStepLogger
 
 
-def _image_suffix(drawing: dict) -> str:
-    return Path(drawing["file_path"]).suffix or ".png"
-
-
 def _mapped_preview(alert) -> dict[str, Any]:
     """The exact shape a flagged_changes row would take for this alert."""
     return {
@@ -92,14 +88,10 @@ def analyze_request(analysis_request_id: str, *, dry_run: bool = False) -> dict[
     try:
         with tempfile.TemporaryDirectory(prefix=f"dre_{run_id}_") as tmp:
             tmp_dir = Path(tmp)
-            old_path = repo.download_drawing_image(
-                old_drawing, tmp_dir / f"old{_image_suffix(old_drawing)}"
-            )
+            old_path = repo.download_drawing_image(old_drawing, tmp_dir, "old")
             new_path = None
             if new_drawing is not None:
-                new_path = repo.download_drawing_image(
-                    new_drawing, tmp_dir / f"new{_image_suffix(new_drawing)}"
-                )
+                new_path = repo.download_drawing_image(new_drawing, tmp_dir, "new")
 
             ctx = PipelineContext(
                 run_id=run_id,

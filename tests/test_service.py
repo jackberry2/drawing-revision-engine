@@ -40,7 +40,8 @@ def test_single_sheet_uses_new_drawing_id_when_old_is_null():
     with patch("dre.service.repo.get_analysis_request", return_value=analysis_request), patch(
         "dre.service.repo.get_drawing", side_effect=lambda did: drawings[did]
     ) as mock_get_drawing, patch(
-        "dre.service.repo.download_drawing_image", side_effect=lambda d, dest: dest
+        "dre.service.repo.download_drawing_image",
+        side_effect=lambda d, dest_dir, basename: dest_dir / f"{basename}.png",
     ), patch(
         "dre.service.build_pipeline", return_value=SimpleNamespace(run=_fake_pipeline_run)
     ):
@@ -64,7 +65,8 @@ def test_single_sheet_uses_old_drawing_id_when_set():
     with patch("dre.service.repo.get_analysis_request", return_value=analysis_request), patch(
         "dre.service.repo.get_drawing", side_effect=lambda did: drawings[did]
     ) as mock_get_drawing, patch(
-        "dre.service.repo.download_drawing_image", side_effect=lambda d, dest: dest
+        "dre.service.repo.download_drawing_image",
+        side_effect=lambda d, dest_dir, basename: dest_dir / f"{basename}.png",
     ), patch(
         "dre.service.build_pipeline", return_value=SimpleNamespace(run=_fake_pipeline_run)
     ):
@@ -118,7 +120,8 @@ def test_two_image_mode_still_loads_both_drawings_normally():
     with patch("dre.service.repo.get_analysis_request", return_value=analysis_request), patch(
         "dre.service.repo.get_drawing", side_effect=lambda did: drawings[did]
     ) as mock_get_drawing, patch(
-        "dre.service.repo.download_drawing_image", side_effect=lambda d, dest: dest
+        "dre.service.repo.download_drawing_image",
+        side_effect=lambda d, dest_dir, basename: dest_dir / f"{basename}.png",
     ), patch(
         "dre.service.build_pipeline", return_value=SimpleNamespace(run=_fake_pipeline_run)
     ):

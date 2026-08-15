@@ -16,6 +16,7 @@ from typing import Any, Optional
 from pydantic import BaseModel
 
 from dre import config
+from dre.imaging import extension_for_media_type, normalize_drawing_bytes
 from dre.models.schemas import ChangeEvent
 from dre.supa.client import get_client
 
@@ -54,14 +55,25 @@ def get_drawing(drawing_id: str) -> dict:
     return resp.data
 
 
-def download_drawing_image(drawing: dict, dest_path: Path) -> Path:
+def download_drawing_image(drawing: dict, dest_dir: Path, basename: str) -> Path:
     """`drawings.file_path` is a path inside the (private) drawings Storage
     bucket, not a directly-fetchable URL — download it via the Storage API
-    using the service role key, which bypasses bucket RLS."""
+    using the service role key, which bypasses bucket RLS.
+
+    The destination filename/extension is decided from the real downloaded
+    content, not from `drawings.file_path`'s extension or Storage's reported
+    mimetype — a real upload (E-101.3) came through as an honestly-labeled
+    PDF, which Claude's vision API can't accept as an `image` block, so PDFs
+    are rasterized to PNG here before ever reaching the pipeline. Every
+    other format is passed through unchanged once its real content is
+    confirmed to be one Claude actually accepts (see `dre.imaging`).
+    """
     data = get_client().storage.from_(config.SUPABASE_DRAWINGS_BUCKET).download(
         drawing["file_path"]
     )
-    dest_path.write_bytes(data)
+    image_bytes, media_type = normalize_drawing_bytes(data)
+    dest_path = dest_dir / f"{basename}{extension_for_media_type(media_type)}"
+    dest_path.write_bytes(image_bytes)
     return dest_path
 
 

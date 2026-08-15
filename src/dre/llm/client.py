@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import base64
 import json
-import mimetypes
 from pathlib import Path
 from typing import Optional, Type, TypeVar
 
@@ -18,6 +17,7 @@ import anthropic
 from pydantic import BaseModel, ValidationError
 
 from dre import config
+from dre.imaging import sniff_image_media_type
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -42,8 +42,13 @@ def get_client() -> anthropic.Anthropic:
 
 
 def encode_image(path: Path) -> dict:
-    media_type = mimetypes.guess_type(str(path))[0] or "image/png"
-    data = base64.standard_b64encode(path.read_bytes()).decode("utf-8")
+    """media_type is sniffed from the file's real bytes, never guessed from
+    its extension — a real upload showed a file's extension/reported
+    content-type can't be trusted to match what's actually inside (see
+    `dre.imaging`)."""
+    raw = path.read_bytes()
+    media_type = sniff_image_media_type(raw)
+    data = base64.standard_b64encode(raw).decode("utf-8")
     return {
         "type": "image",
         "source": {"type": "base64", "media_type": media_type, "data": data},
