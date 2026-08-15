@@ -133,3 +133,12 @@ wasn't. Whether re-analysis should delete-and-replace prior rows, be
 rejected outright once a request is already analyzed, or stay something the
 caller (Lovable) is responsible for avoiding is a product decision, not
 answered here.
+
+## One-off: transient `classify` malformed tool-call failure
+
+A single E-101.3 re-run hit `call_structured`'s "malformed payload 3 times
+in a row" failure on `classify` (`emit_classifyresponse`), unrelated to the
+resolution work above — the response never hit the max_tokens/truncation
+branch, so it wasn't an oversized-output issue. Succeeded cleanly on
+immediate retry with no other change. Not investigated further since it
+hasn't recurred; noting it here in case it does.
