@@ -146,6 +146,28 @@ class SupabaseStepLogger:
 # ---- flagged_changes / pipeline_change_events ----
 
 
+def delete_flagged_changes_for_analysis_request(analysis_request_id: str) -> None:
+    """Clears this request's prior flagged_changes before a re-analysis
+    writes new ones, so a request's rows always reflect only its latest
+    analysis run — not an accumulation across retries. A real production
+    bug: two independently-triggered analyze calls against the same
+    analysis_request_id each wrote their own rows with nothing superseding
+    the earlier ones, so both sets sat side by side and looked like a single
+    run's over-segmentation until traced back through pipeline_steps.
+
+    Note on cascade behavior: pipeline_change_events.flagged_change_id is
+    ON DELETE SET NULL (that row survives, orphaned, for the training-data
+    record), but human_reviews.flagged_change_id is ON DELETE CASCADE — a
+    human review already recorded against a flagged_change that gets
+    superseded here is deleted along with it. Re-analyzing an
+    already-reviewed request destroys that review; nothing here guards
+    against it.
+    """
+    get_client().table("flagged_changes").delete().eq(
+        "analysis_request_id", analysis_request_id
+    ).execute()
+
+
 def save_flagged_change(
     *,
     project_id: str,

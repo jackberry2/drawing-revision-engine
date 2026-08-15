@@ -42,10 +42,17 @@ class FakeQuery:
         self.recorder.updates.append((self.table_name, payload))
         return self
 
+    def delete(self):
+        self.recorder.deletes.append([self.table_name, {}])
+        self._pending_delete = True
+        return self
+
     def select(self, *args, **kwargs):
         return self
 
-    def eq(self, *args, **kwargs):
+    def eq(self, column, value, **kwargs):
+        if getattr(self, "_pending_delete", False):
+            self.recorder.deletes[-1][1][column] = value
         return self
 
     def single(self):
@@ -59,6 +66,7 @@ class FakeClient:
     def __init__(self):
         self.inserts: list[tuple[str, dict]] = []
         self.updates: list[tuple[str, dict]] = []
+        self.deletes: list[list] = []
         self.fake_data: dict[str, dict] = {}
 
     def table(self, name: str) -> FakeQuery:
@@ -99,6 +107,21 @@ def test_save_flagged_change_matches_real_table_columns():
     }
     assert payload["change_type"] == "moved"
     assert payload["confidence_percentage"] == 95
+
+
+def test_delete_flagged_changes_for_analysis_request_filters_by_request_id():
+    """A real production bug: re-analyzing the same analysis_request_id
+    appended new flagged_changes rows alongside an earlier run's, rather
+    than superseding them — two independently-triggered runs against one
+    request left both sets of rows sitting side by side, which looked like
+    single-run over-segmentation until traced back through pipeline_steps.
+    A re-analysis must always clear the prior run's rows for that request
+    first, scoped only to that request (never a blanket delete)."""
+    fake = FakeClient()
+    with patch("dre.supa.repository.get_client", return_value=fake):
+        repo.delete_flagged_changes_for_analysis_request("ar-1")
+
+    assert fake.deletes == [["flagged_changes", {"analysis_request_id": "ar-1"}]]
 
 
 def test_create_pipeline_run_supports_single_sheet_mode():

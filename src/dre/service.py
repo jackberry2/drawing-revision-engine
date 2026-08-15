@@ -124,6 +124,11 @@ def analyze_request(analysis_request_id: str, *, dry_run: bool = False) -> dict[
     # what flagged_changes.drawing_id points at.
     result_drawing = new_drawing if new_drawing is not None else old_drawing
 
+    # Clear this request's prior flagged_changes now that the new pipeline
+    # run has actually succeeded — a re-analysis always supersedes, never
+    # accumulates alongside, an earlier run's output for the same request.
+    repo.delete_flagged_changes_for_analysis_request(analysis_request_id)
+
     for alert in result.alerts:
         change_event = change_events_by_id[alert.change_event_id]
         flagged_change_id = repo.save_flagged_change(
