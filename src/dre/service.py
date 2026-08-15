@@ -4,10 +4,12 @@ reasoning pipeline, map the result onto `flagged_changes`, and record the
 richer internal reasoning in `pipeline_change_events` alongside it.
 
 Handles both modes transparently based on `analysis_requests.mode`:
-two_image (old_drawing_id + new_drawing_id both set) and single_sheet
-(old_drawing_id only, new_drawing_id NULL — see
+two_image (old_drawing_id + new_drawing_id both set) and single_sheet (the
+one sheet's drawing id in *either* old_drawing_id or new_drawing_id, with
+the other column NULL — Lovable's own single-sheet requests populate
+new_drawing_id and leave old_drawing_id NULL — see
 docs/single_sheet_mode_findings.md). Callers don't need to know which mode
-a request is; this reads it off the row.
+a request is or which column it used; this reads it off the row.
 
 `dry_run=True` does everything read-only: fetches the real request/drawings,
 downloads the real image(s), runs the real pipeline (including real Claude
@@ -48,9 +50,32 @@ def analyze_request(analysis_request_id: str, *, dry_run: bool = False) -> dict[
     analysis_request = repo.get_analysis_request(analysis_request_id)
     mode = analysis_request.get("mode") or "two_image"
 
-    old_drawing = repo.get_drawing(analysis_request["old_drawing_id"])
+    old_drawing_id: Optional[str] = analysis_request.get("old_drawing_id")
     new_drawing_id: Optional[str] = analysis_request.get("new_drawing_id")
-    new_drawing = repo.get_drawing(new_drawing_id) if new_drawing_id else None
+
+    if mode == "single_sheet":
+        # The caller may populate either column with the one sheet being
+        # reviewed — Lovable's own single-sheet requests set new_drawing_id
+        # and leave old_drawing_id NULL, the opposite of what this service
+        # originally assumed. Never pass a None id into a uuid-typed lookup
+        # (postgrest-py stringifies it to the literal "None", which Postgres
+        # then rejects with "invalid input syntax for type uuid").
+        sheet_drawing_id = old_drawing_id or new_drawing_id
+        if not sheet_drawing_id:
+            raise ValueError(
+                f"analysis_request {analysis_request_id} is mode='single_sheet' but "
+                "neither old_drawing_id nor new_drawing_id is set"
+            )
+        old_drawing = repo.get_drawing(sheet_drawing_id)
+        new_drawing = None
+    else:
+        if not old_drawing_id:
+            raise ValueError(
+                f"analysis_request {analysis_request_id} is mode={mode!r} but "
+                "old_drawing_id is not set"
+            )
+        old_drawing = repo.get_drawing(old_drawing_id)
+        new_drawing = repo.get_drawing(new_drawing_id) if new_drawing_id else None
 
     run_id = (
         f"dryrun_{analysis_request_id}"
@@ -102,8 +127,9 @@ def analyze_request(analysis_request_id: str, *, dry_run: bool = False) -> dict[
 
     change_events_by_id = {e.id: e for e in result.change_events}
     flagged_change_ids: list[str] = []
-    # In single_sheet mode there's only one drawing — old_drawing is the
-    # sheet under review, so it's what flagged_changes.drawing_id points at.
+    # In single_sheet mode there's only one drawing — it's always loaded into
+    # old_drawing above (regardless of which column it came from), so it's
+    # what flagged_changes.drawing_id points at.
     result_drawing = new_drawing if new_drawing is not None else old_drawing
 
     for alert in result.alerts:

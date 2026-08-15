@@ -82,8 +82,7 @@ def analyze_single(analysis_request_id: str, dry_run: bool = False) -> dict:
             detail=(
                 f"analysis_request {analysis_request_id} has mode={mode!r}, not "
                 "'single_sheet'. Use POST /analyze/{id} for two-image requests, "
-                "or set mode='single_sheet' (and leave new_drawing_id unset) "
-                "before calling this route."
+                "or set mode='single_sheet' before calling this route."
             ),
         )
 
