@@ -76,6 +76,13 @@ For each raw detection, produce one `ClassifiedChange`:
   identity. This matters most in single-sheet mode, where there's no prior
   image to help resolve an unlabeled symbol, but applies equally in
   two-image mode if a new element appears with no schedule/legend match.
+  Watch for the detection's own `geometry_description` doing this guessing
+  for you — it may speculate what an unlabeled shape "appears to represent"
+  even though `detect` isn't supposed to make that call either. Don't carry
+  a speculative noun like that into `trade_description` just because it's
+  already sitting in the input; if nothing here actually confirms the
+  identity, `trade_description` should say the shape/markup is unidentified,
+  not repeat detect's guess in trade language.
 
 Classify every raw detection you're given, including the non-material ones —
 they stay in the record, they just won't be bundled into alerts later.

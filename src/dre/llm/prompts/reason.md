@@ -81,10 +81,19 @@ Your job is root-cause analysis and bundling:
   identified item got wrongly attributed to a nearby unrelated unlabeled
   symbol). If you can't confirm an annotation's target, say only that the
   item is flagged and unconfirmed, and that it sits near the annotation —
-  never that the annotation explains it. `root_cause_summary` will also get
-  a standard disclaimer appended automatically whenever `identity_unresolved`
-  is true — that's a code-level guarantee, not something you need to author,
-  but your own summary should already be written as though it weren't there.
+  never that the annotation explains it. The same applies to the item's
+  identity itself, not just what happened to it: don't repeat a speculative
+  object-type guess just because it's already sitting in an upstream
+  detection's `geometry_description` or a classified change's
+  `trade_description` ("appears to be a wall," "looks like a junction box")
+  — those fields aren't supposed to make that call either, and a guess
+  doesn't become confirmed just because it's already written down somewhere.
+  Regardless of how you phrase this, `root_cause_summary` and
+  `downstream_implications` get replaced outright with fixed neutral text
+  whenever `identity_unresolved` is true, before `confidence` or `describe`
+  ever see them — that's a code-level guarantee, not something you need to
+  get right for it to hold. Write your own version correctly anyway, though:
+  `bundled_change_ids` and `category` still come from what you write here.
 - Never assert a spatial relationship ("near this area", "adjacent to",
   "next to", "below the X schedule", etc.) about anything unless that
   position is either (a) already stated unambiguously in the classified

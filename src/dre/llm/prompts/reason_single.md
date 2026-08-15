@@ -48,7 +48,13 @@ mode, adapted for what's actually available:
   the Conference Room; its identity and purpose can't be confirmed against
   the panel schedule or any legend on this sheet."). Do not guess a specific
   device type or circuit assignment for it in `root_cause_summary` — that's
-  exactly the false-certainty failure mode this field exists to avoid.
+  exactly the false-certainty failure mode this field exists to avoid. This
+  also means not repeating a speculative object-type guess if one is already
+  sitting in the input data (a classified change's `trade_description`, or a
+  raw detection's `geometry_description`) — "appears to be a wall/partition,"
+  "looks like a junction box," etc. Those upstream fields aren't supposed to
+  make that call either, and a guess doesn't become confirmed just because
+  it's already written down somewhere upstream.
   This includes the *type of change itself*: do not write that an
   identity-unresolved item "moved," "was added," "was removed," or "was
   modified" — those are all specific claims about what happened to it, and
@@ -60,11 +66,15 @@ mode, adapted for what's actually available:
   got wrongly attributed to an unrelated unlabeled symbol just because it
   was close by). If you can't confirm the annotation's target, say only that
   the item is flagged and unconfirmed, and that it sits near the annotation
-  — never that the annotation explains it. Note that even if you phrase this
-  correctly, `root_cause_summary` will have a standard disclaimer appended
-  automatically whenever `identity_unresolved` is true — write your own
-  summary as though that disclaimer isn't there yet, but the enforcement
-  itself is a code-level guarantee, not something you need to author.
+  — never that the annotation explains it. Regardless of how you phrase this,
+  `root_cause_summary` and `downstream_implications` get replaced outright
+  with fixed neutral text whenever `identity_unresolved` is true, before
+  `confidence` or `describe` ever see them — that's a code-level guarantee,
+  not something you need to get right for it to hold. Write your own version
+  correctly anyway, though: `bundled_change_ids` and `category` still come
+  from what you write here, and getting the *rest* of this event right
+  (which classified changes belong together, category forced to `OTHER`)
+  still matters even though the prose itself is a safety net.
 - Never assert a spatial relationship you haven't actually verified in the
   image, and never resolve an ambiguous-target annotation by picking
   whichever event it fits best — same rule as two-image mode. If `classify`

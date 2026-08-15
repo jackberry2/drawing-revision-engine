@@ -158,12 +158,13 @@ def test_enforce_identity_unresolved_already_other_is_left_alone():
     assert unchanged.category == ChangeCategory.OTHER
 
 
-def test_enforce_identity_unresolved_appends_prose_disclaimer():
-    """The real E-501 bug: category was correctly forced to `other` and
+def test_enforce_identity_unresolved_replaces_prose_that_asserts_a_change_type():
+    """The first real E-501 bug: category was correctly forced to `other` and
     identity_unresolved to True, but root_cause_summary prose still asserted
     the item "also moved" — a mismatch between the honest structured fields
-    and what a human actually reads. The disclaimer must be guaranteed in
-    the text itself, not just implied by the enum/bool fields."""
+    and what a human actually reads. An append-only disclaimer isn't a
+    strong enough guarantee (see the identity-noun regression test below),
+    so the field gets replaced outright."""
     material = [_classified_change("cc1", identity_unresolved=True)]
     event = ChangeEvent(
         id="e1",
@@ -174,13 +175,20 @@ def test_enforce_identity_unresolved_appends_prose_disclaimer():
         identity_unresolved=False,
     )
     [fixed] = enforce_identity_unresolved([event], material)
-    assert "identity is unconfirmed" in fixed.root_cause_summary
-    assert fixed.root_cause_summary.startswith(
-        "An unlabeled bar's cloud sits near O1's note, flagged as also having moved."
-    )
+    assert "identity" in fixed.root_cause_summary
+    assert "also having moved" not in fixed.root_cause_summary
 
 
-def test_enforce_identity_unresolved_does_not_duplicate_disclaimer():
+def test_enforce_identity_unresolved_replaces_prose_that_asserts_a_specific_identity():
+    """The second real E-501 bug, on the identical test image: detect_single's
+    geometry_description speculated an unlabeled shape "appears to represent
+    a wall or partition segment" — a specific *identity* claim, not a
+    change-type claim, so the previous append-only-disclaimer fix (which only
+    targeted change-type verbs) didn't catch it. That noun propagated
+    unedited through classify/reason all the way to the final alert prose.
+    Replacing root_cause_summary/downstream_implications outright, regardless
+    of what specific wrong word the model used, is what actually guarantees
+    this can't leak through to the reviewer-facing text."""
     material = [_classified_change("cc1", identity_unresolved=True)]
     event = ChangeEvent(
         id="e1",
@@ -188,15 +196,36 @@ def test_enforce_identity_unresolved_does_not_duplicate_disclaimer():
         bundled_change_ids=["cc1"],
         category=ChangeCategory.OTHER,
         root_cause_summary=(
-            "Unidentified symbol flagged. This item's identity is unconfirmed, so the "
-            "specific nature of any change to it — including whether it moved, was "
-            "added, or was modified — cannot be confirmed from this sheet either; "
-            "only that it's flagged."
+            "A wall/partition segment near the top of the Conference Room is "
+            "flagged with a revision cloud."
         ),
+        downstream_implications=[
+            "If this wall/partition is new or moved, it could affect circuit routing.",
+        ],
+        schedule_consistency="The panel schedule contains no entry for a wall or partition.",
         identity_unresolved=True,
     )
-    [unchanged] = enforce_identity_unresolved([event], material)
-    assert unchanged.root_cause_summary.count("identity is unconfirmed") == 1
+    [fixed] = enforce_identity_unresolved([event], material)
+    assert "wall" not in fixed.root_cause_summary.lower()
+    assert "partition" not in fixed.root_cause_summary.lower()
+    assert all("wall" not in d.lower() and "partition" not in d.lower() for d in fixed.downstream_implications)
+    assert fixed.schedule_consistency is None
+
+
+def test_enforce_identity_unresolved_is_idempotent_on_replaced_summary():
+    material = [_classified_change("cc1", identity_unresolved=True)]
+    event = ChangeEvent(
+        id="e1",
+        root_cause_change_id="cc1",
+        bundled_change_ids=["cc1"],
+        category=ChangeCategory.OTHER,
+        root_cause_summary="unidentified symbol flagged",
+        identity_unresolved=True,
+    )
+    [once] = enforce_identity_unresolved([event], material)
+    [twice] = enforce_identity_unresolved([once], material)
+    assert once.root_cause_summary == twice.root_cause_summary
+    assert once.downstream_implications == twice.downstream_implications
 
 
 def test_enforce_identity_unresolved_leaves_resolved_summary_untouched():

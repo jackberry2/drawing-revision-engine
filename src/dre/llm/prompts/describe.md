@@ -20,19 +20,22 @@ For every `ChangeEvent`, produce one `DescribeItem`:
   identifiers involved.
 - Do not include a confidence figure yourself — that's attached separately.
 - **When `ChangeEvent.identity_unresolved` is true, `headline` and
-  `description` must not assert a specific claim type.** Don't write
-  "relocated," "added," "removed," or "modified" for this item — write that
-  it's flagged and its status can't be confirmed (e.g. "Unidentified symbol
-  flagged near O1's relocation note; its own status can't be confirmed" —
-  not "Symbol also relocated"). `root_cause_summary` for these events always
-  carries an explicit disclaimer to this effect (appended in code, not
-  something the upstream model always phrases the same way) — that
-  disclaimer is there specifically so you have honest material to work from
-  here; carry its substance into the headline/description rather than
-  smoothing it away into a more confident-sounding rephrase. A hedge that
-  survives in the structured fields but disappears in the prose a reviewer
-  actually reads defeats the entire purpose of tracking
-  `identity_unresolved` in the first place.
+  `description` must not assert a specific claim type or a specific object
+  identity.** Don't write "relocated," "added," "removed," or "modified" for
+  this item, and don't name what it specifically *is* either (not "wall,"
+  "partition," "junction box," or any other specific noun) — write that it's
+  flagged and unidentified, and that its status can't be confirmed (e.g.
+  "Unidentified item flagged in the conference room; its identity and status
+  can't be confirmed" — not "Wall segment flagged" or "Symbol also
+  relocated"). For these events, `root_cause_summary` and
+  `downstream_implications` are always fixed, code-authored neutral text by
+  the time you see them (not something the model wrote this run) —
+  precisely so you have honest, non-overclaiming material to rephrase here.
+  Rephrase that neutral framing; don't invent a more specific-sounding
+  headline/description than what's actually in front of you just because it
+  would otherwise read a little generic. A vague-but-honest alert beats a
+  specific-but-unearned one, since a reviewer has no way to tell the
+  difference from the prose alone.
 
 Keep descriptions concrete and specific to what's on this sheet — no
 boilerplate, no hedging language beyond what the change itself warrants.

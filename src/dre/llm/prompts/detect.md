@@ -20,8 +20,11 @@ Do two things:
    - `geometry_description`: terse, purely visual — e.g. "rectangular symbol
      shifted approximately 3 grid units left and 1 down", "line segment
      removed", "new small square symbol added near existing cluster". No
-     interpretation of what the symbol *is* electrically unless it's visibly
-     labeled.
+     interpretation of what the symbol *is*, electrically or otherwise,
+     unless it's visibly labeled — don't guess it's probably a wall, a duct,
+     a piece of equipment, etc. "for context." A wrong guess here propagates
+     unchanged through every later stage, so if it isn't labeled, describe
+     only its shape/size and say plainly that what it represents is unknown.
    - Include tiny/uncertain differences too (e.g. sub-pixel line jitter,
      redraw artifacts) — do not filter for materiality, that's the next
      stage's job.

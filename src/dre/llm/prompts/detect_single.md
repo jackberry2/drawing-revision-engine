@@ -30,10 +30,18 @@ Do two things:
      like and what the markup says, if it says anything (e.g. "duplex
      receptacle symbol inside a revision cloud, with handwritten text
      'RELOCATED PER RFI #14' beneath it"). No interpretation of electrical
-     significance yet — that's `classify`'s job. If a revision cloud/tag
-     doesn't correspond to any element you can actually identify inside it,
-     still emit a detection for it and say so in `geometry_description`
-     rather than skipping it.
+     significance yet — that's `classify`'s job. This also means no guessing
+     what an unlabeled shape *represents*, electrical or otherwise — "a
+     vertical black bar/rectangle" is a visual description; "a wall or
+     partition segment" is an interpretation, and a wrong one is exactly as
+     costly as a wrong electrical guess, since whatever word you use here
+     propagates unchanged through every later stage. If you can't identify
+     an element from a legend, schedule, or label, describe only its literal
+     shape/size/line-style and say plainly that what it represents is
+     unknown — do not offer a plausible-sounding guess "for context." If a
+     revision cloud/tag doesn't correspond to any element you can actually
+     identify inside it, still emit a detection for it and say so in
+     `geometry_description` rather than skipping it.
    - Do not emit a detection for something with no markup just because it
      seems electrically interesting — without a prior revision, you have no
      basis to claim it changed. Only markup is evidence in this mode.
