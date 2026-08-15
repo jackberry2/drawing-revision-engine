@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from dre import config
-from dre.llm.client import call_structured, dump_models, encode_image, load_prompt
-from dre.models.schemas import ChangeEvent, ConfidenceFactors, ConfidenceResponse, ConfidenceScore
+from dre.llm.client import call_structured, encode_image, load_prompt
+from dre.models.schemas import ChangeEvent, ConfidenceFactors, ConfidenceScore
 from dre.pipeline.base import PipelineContext, PipelineStep
 from dre.pipeline.classify import SINGLE_SHEET_NOTE
 
@@ -140,6 +140,23 @@ def _to_confidence_score(
     )
 
 
+def _user_content_for(ctx: PipelineContext, event: ChangeEvent) -> list[dict]:
+    if ctx.mode == "single_sheet":
+        return [
+            {"type": "text", "text": "Change event (JSON):\n" + event.model_dump_json()},
+            {"type": "text", "text": SINGLE_SHEET_NOTE},
+            encode_image(ctx.old_image_path),
+        ]
+    assert ctx.new_image_path is not None
+    return [
+        {"type": "text", "text": "Change event (JSON):\n" + event.model_dump_json()},
+        {"type": "text", "text": "OLD revision of the sheet:"},
+        encode_image(ctx.old_image_path),
+        {"type": "text", "text": "NEW revision of the sheet:"},
+        encode_image(ctx.new_image_path),
+    ]
+
+
 class ConfidenceStep(PipelineStep):
     """Explicit, inspectable confidence scoring — its own step rather than a
     number folded into the reasoning stage's prompt, so it can be audited or
@@ -148,10 +165,20 @@ class ConfidenceStep(PipelineStep):
     underlying factors; the final score is computed deterministically from
     them (see `synthesize_score`), with a mode/identity_unresolved ceiling
     clamp applied first (see `apply_mode_ceiling`).
+
+    One Claude call per `ChangeEvent`, not one batched call for all of them.
+    A real production run surfaced cross-contamination between two events
+    scored in the same batched response — internally coherent-looking notes
+    and numbers that had actually been generated for a *different* event
+    than the one they ended up attached to, undetectable by schema
+    validation since every individual field was still well-formed. See
+    docs/pipeline_notes.md. Scoring one event per call costs more API calls
+    but makes that failure mode structurally impossible: there's nothing
+    else in the same response for one event's content to get confused with.
     """
 
     name = "confidence"
-    version = "v2"
+    version = "v3"
     model_used = config.REASONING_MODEL
 
     def input_for_log(self, ctx: PipelineContext) -> dict:
@@ -162,35 +189,17 @@ class ConfidenceStep(PipelineStep):
             ctx.confidence_scores = {}
             return []
 
-        if ctx.mode == "single_sheet":
-            user_content = [
-                {"type": "text", "text": "Change events (JSON):\n" + dump_models(ctx.change_events)},
-                {"type": "text", "text": SINGLE_SHEET_NOTE},
-                encode_image(ctx.old_image_path),
-            ]
-        else:
-            assert ctx.new_image_path is not None
-            user_content = [
-                {"type": "text", "text": "Change events (JSON):\n" + dump_models(ctx.change_events)},
-                {"type": "text", "text": "OLD revision of the sheet:"},
-                encode_image(ctx.old_image_path),
-                {"type": "text", "text": "NEW revision of the sheet:"},
-                encode_image(ctx.new_image_path),
-            ]
-
-        result = call_structured(
-            system=load_prompt("confidence"),
-            user_content=user_content,
-            response_model=ConfidenceResponse,
-            model=self.model_used,
-        )
-
-        events_by_id: dict[str, ChangeEvent] = {e.id: e for e in ctx.change_events}
         scores = []
-        for f in result.assessments:
-            event = events_by_id.get(f.change_event_id)
-            identity_unresolved = event.identity_unresolved if event else False
-            scores.append(_to_confidence_score(f, mode=ctx.mode, identity_unresolved=identity_unresolved))
+        for event in ctx.change_events:
+            factors = call_structured(
+                system=load_prompt("confidence"),
+                user_content=_user_content_for(ctx, event),
+                response_model=ConfidenceFactors,
+                model=self.model_used,
+            )
+            scores.append(
+                _to_confidence_score(factors, mode=ctx.mode, identity_unresolved=event.identity_unresolved)
+            )
 
         ctx.confidence_scores = {s.change_event_id: s for s in scores}
         return scores

@@ -142,7 +142,51 @@ normal category. Concretely:
   "flagged for [X], identity/purpose unconfirmed" — not a confident device
   description standing in for something the pipeline actually doesn't know.
 
-## Appendix: raw test output
+## 5. "Moved" claims are structurally less verifiable than "added" claims
+
+Confirmed by the real, implemented single-sheet mode against E-501 (see
+appendix addendum): O1's relocation landed at 61% confidence
+(`ambiguity_factor` 0.5) while the C3 schedule addition landed at 82%
+(`ambiguity_factor` 0.85), even though both were marked by the drafter
+equally clearly. That gap emerged correctly from the model's own reasoning
+on this run — worth understanding *why*, and whether to trust it to keep
+happening.
+
+An addition can be self-evidenced by the *current* state alone: an explicit
+"(NEW)" label, a newly-highlighted schedule row, a row that simply wasn't
+there before all directly prove something new exists, with no prior-state
+comparison needed. A relocation claim is different in kind — verifying "this
+moved" fundamentally requires comparing a position now to a position before,
+which is exactly the information single-sheet mode structurally lacks.
+There's no current-state marker that substitutes for "I can see it used to
+be somewhere else." So the *category* of the underlying claim (added/removed
+vs. moved) carries real information about how verifiable it can even be in
+this mode, independent of how clearly it's marked.
+
+The model discounted O1's ambiguity correctly this run, but per the same
+reasoning behind `identity_unresolved` (#4), trusting that discount to be
+consistent run-to-run is a weaker guarantee than a structural one — nothing
+stops a future run from scoring a relocation claim's `ambiguity_factor` near
+1.0 if the markup happens to look especially convincing, the way E-201's
+`ambiguity_factor` swung between runs on visual evidence alone (see the
+earlier confidence-variance investigation).
+
+**Recommendation**: yes, enforce this in scoring, the same way as
+`identity_unresolved` — a second, stricter ceiling specific to relocation
+categories (`panel_relocation`, `device_relocation`) in single-sheet mode.
+Proposed: `ambiguity_factor` capped around **0.6** for these categories
+specifically (vs. 0.85 for other single-sheet material changes). Under the
+existing formula that puts maximum relocation confidence at roughly
+`0.60*0.6 + 0.25*image_quality + 0.15*corroboration` ≈ high-50s/low-60s%
+even at perfect image quality and corroboration — solidly low tier, not
+merely excluded from high tier the way other single-sheet changes are.
+Whether removal claims deserve the same treatment is untested (no removal
+case has come up yet), but the same logic — no current-state marker proves
+something used to be present and now isn't — likely applies just as
+strongly, maybe more so. Worth checking against a real single-sheet removal
+case before deciding whether to extend the cap to that category too.
+
+## Appendix A: raw manual test output (pre-implementation)
 
 Sheet: E-501 Rev 2 (Conference Room, Panel P-5). Fed through `detect` →
 `classify` → `reason` with the unmodified prompts, plus one clarifying note
@@ -171,3 +215,33 @@ of the three material items were causally linked to each other):
   matches it and `downstream_implications` recommending the estimator
   confirm its identity — this is the item finding #4 addresses.
 - The new C3/HVAC circuit, directly corroborated by the new schedule row.
+
+## Appendix B: real implementation verification
+
+After implementing single-sheet mode (`detect_single`/`reason_single`
+stages, `flagged_by`/`schedule_consistency` fields, the confidence ceiling
+clamp, `identity_unresolved` forcing), the same E-501 sheet was run through
+the actual `POST /analyze/{id}` endpoint (`mode: "single_sheet"` read
+automatically off `analysis_requests.mode`, no separate endpoint needed).
+Confirmed the designed behaviors held on real output, not just in unit
+tests against synthetic factor values:
+
+- **O1 relocation**: `device_relocation` → `moved`, 61% confidence (low
+  tier). `ambiguity_note` explicitly states it "there is no way to visually
+  verify the outlet actually moved" — the honest-uncertainty framing #1 and
+  #2 called for, produced without a category-specific ceiling in place yet
+  (see #5 above on whether to make this structural rather than emergent).
+- **Unlabeled vertical bar**: category `other` (not a confident device
+  guess), 35% confidence (low tier, `ambiguity_factor` 0.2), description
+  states plainly its identity "cannot be determined from this sheet." This
+  is the #4 behavior working end to end — no schedule/legend match, no
+  false-certainty category assigned.
+- **C3/HVAC schedule addition**: `device_added` → `added`, 82% confidence
+  (medium tier — never high, per the #2 ceiling) despite being the clearest,
+  best-corroborated item of the three (`ambiguity_factor` 0.85,
+  `image_quality_factor` 0.95). Description cites the schedule row itself
+  as primary evidence.
+
+All three landed in the user's real project via a dry run first, then a
+real write to `flagged_changes` once confirmed correct — no code changes
+were needed after the initial implementation to get this output.

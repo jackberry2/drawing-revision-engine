@@ -193,10 +193,6 @@ class ConfidenceFactors(BaseModel):
     rationale: str = Field(..., description="Human-readable summary of the three factor assessments.")
 
 
-class ConfidenceResponse(BaseModel):
-    assessments: list[ConfidenceFactors]
-
-
 class ConfidenceScore(BaseModel):
     """The final, usable confidence — ConfidenceFactors plus the
     deterministically-computed `score`."""
