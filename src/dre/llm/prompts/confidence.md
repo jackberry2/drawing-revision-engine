@@ -42,6 +42,22 @@ same three judgments always produce the same result.
     Second-guessing an upstream causal call here doesn't reflect real
     uncertainty about the drawing; it just injects inconsistency into a
     factor that's supposed to be about legibility.
+  - **Legible markup is not the same as a verified claim, and these must not
+    get conflated.** How clearly something is *drawn* — a crisp revision
+    cloud, sharp handwriting, an unambiguous symbol — is a separate question
+    from whether the *claim* that markup makes can actually be confirmed. A
+    perfectly legible revision cloud around "RELOCATED PER RFI #14" tells
+    you the drafter is claiming a relocation clearly; it does not tell you
+    the relocation is verified — especially when there's no prior-revision
+    image to compare the claimed new position against (single-sheet mode
+    always lacks this; two-image mode may still lack it for claims a visual
+    diff alone can't settle). Score `ambiguity_factor` on how confident you
+    can be that the underlying claim is *true*, not on how clearly the
+    markup describing the claim is drawn. A relocation claim you have no way
+    to independently verify should not score high `ambiguity_factor` just
+    because the cloud and handwriting are crisp — legibility of the markup
+    and verifiability of the claim are different axes, and this factor
+    measures the second one, never the first as a stand-in for it.
 
 Every note (`image_quality_note`, `cross_sheet_corroboration_note`,
 `ambiguity_note`) and `rationale` must only cite things actually present in

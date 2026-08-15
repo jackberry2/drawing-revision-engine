@@ -5,31 +5,15 @@ from dre.llm.client import call_structured, dump_models, encode_image, load_prom
 from dre.models.schemas import ChangeEvent, ClassifiedChange, ReasonResponse
 from dre.pipeline.base import PipelineContext, PipelineStep
 from dre.pipeline.classify import SINGLE_SHEET_NOTE
-
-
-def _force_identity_unresolved(
-    change_events: list[ChangeEvent], material: list[ClassifiedChange]
-) -> list[ChangeEvent]:
-    """Don't trust the model to consistently propagate
-    ClassifiedChange.identity_unresolved into ChangeEvent.identity_unresolved
-    on its own — compute it from data we already have. Same principle as the
-    confidence-stage fix: enforce in code what can be computed, rather than
-    hoping the model self-reports it the same way every time."""
-    material_by_id = {c.id: c for c in material}
-    result = []
-    for event in change_events:
-        bundled = [material_by_id[cid] for cid in event.bundled_change_ids if cid in material_by_id]
-        if any(c.identity_unresolved for c in bundled) and not event.identity_unresolved:
-            event = event.model_copy(update={"identity_unresolved": True})
-        result.append(event)
-    return result
+from dre.pipeline.identity_resolution import enforce_identity_unresolved
 
 
 class ReasonSingleStep(PipelineStep):
     """Single-sheet-mode reason: bundles material flagged changes into
     ChangeEvents using `schedule_consistency` (not `schedule_corroboration`)
-    and forces `identity_unresolved` through from classify rather than
-    trusting the model's own propagation of it.
+    and forces `identity_unresolved`/`category` through from classify rather
+    than trusting the model's own propagation of them (see
+    `identity_resolution.enforce_identity_unresolved`).
     """
 
     name = "reason_single"
@@ -71,6 +55,6 @@ class ReasonSingleStep(PipelineStep):
             response_model=ReasonResponse,
             model=self.model_used,
         )
-        change_events = _force_identity_unresolved(result.change_events, material)
+        change_events = enforce_identity_unresolved(result.change_events, material)
         ctx.change_events = change_events
         return change_events

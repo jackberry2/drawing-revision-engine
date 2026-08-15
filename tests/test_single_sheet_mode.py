@@ -8,7 +8,7 @@ from dre.pipeline.confidence import (
     synthesize_score,
 )
 from dre.models.schemas import ChangeCategory, ChangeEvent, ClassifiedChange
-from dre.pipeline.reason_single import _force_identity_unresolved
+from dre.pipeline.identity_resolution import enforce_identity_unresolved
 from dre.pipeline.runner import build_pipeline
 from dre.pipeline.base import NullStepLogger
 
@@ -97,7 +97,7 @@ def _classified_change(id_, identity_unresolved) -> ClassifiedChange:
     )
 
 
-def test_force_identity_unresolved_overrides_model_when_unresolved_change_bundled():
+def test_enforce_identity_unresolved_overrides_model_when_unresolved_change_bundled():
     material = [_classified_change("cc1", identity_unresolved=True)]
     event = ChangeEvent(
         id="e1",
@@ -107,11 +107,11 @@ def test_force_identity_unresolved_overrides_model_when_unresolved_change_bundle
         root_cause_summary="unidentified symbol",
         identity_unresolved=False,  # model forgot to set it
     )
-    [fixed] = _force_identity_unresolved([event], material)
+    [fixed] = enforce_identity_unresolved([event], material)
     assert fixed.identity_unresolved is True
 
 
-def test_force_identity_unresolved_leaves_resolved_events_alone():
+def test_enforce_identity_unresolved_leaves_resolved_events_alone():
     material = [_classified_change("cc1", identity_unresolved=False)]
     event = ChangeEvent(
         id="e1",
@@ -121,8 +121,41 @@ def test_force_identity_unresolved_leaves_resolved_events_alone():
         root_cause_summary="outlet added",
         identity_unresolved=False,
     )
-    [unchanged] = _force_identity_unresolved([event], material)
+    [unchanged] = enforce_identity_unresolved([event], material)
     assert unchanged.identity_unresolved is False
+    assert unchanged.category == ChangeCategory.DEVICE_ADDED
+
+
+def test_enforce_identity_unresolved_forces_category_to_other():
+    """The real E-501 bug: the model asserted `device_relocation` for an
+    item whose identity was unresolved, because it misattributed a nearby
+    annotation to it. A low confidence number alone doesn't fix that - the
+    category itself has to stop asserting a specific claim type."""
+    material = [_classified_change("cc1", identity_unresolved=True)]
+    event = ChangeEvent(
+        id="e1",
+        root_cause_change_id="cc1",
+        bundled_change_ids=["cc1"],
+        category=ChangeCategory.DEVICE_RELOCATION,
+        root_cause_summary="unidentified symbol, possibly relocated",
+        identity_unresolved=True,
+    )
+    [fixed] = enforce_identity_unresolved([event], material)
+    assert fixed.category == ChangeCategory.OTHER
+
+
+def test_enforce_identity_unresolved_already_other_is_left_alone():
+    material = [_classified_change("cc1", identity_unresolved=True)]
+    event = ChangeEvent(
+        id="e1",
+        root_cause_change_id="cc1",
+        bundled_change_ids=["cc1"],
+        category=ChangeCategory.OTHER,
+        root_cause_summary="unidentified symbol",
+        identity_unresolved=True,
+    )
+    [unchanged] = enforce_identity_unresolved([event], material)
+    assert unchanged.category == ChangeCategory.OTHER
 
 
 def test_build_pipeline_selects_single_sheet_stages():
