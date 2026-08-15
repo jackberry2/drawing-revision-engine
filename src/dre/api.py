@@ -13,6 +13,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from dre import config, service
+from dre.supa import repository as repo
 
 app = FastAPI(title="Drawing Revision Engine")
 
@@ -43,7 +44,49 @@ def require_api_key(x_api_key: str = Header(default="")) -> None:
 @app.post("/analyze/{analysis_request_id}", dependencies=[Depends(require_api_key)])
 def analyze(analysis_request_id: str, dry_run: bool = False) -> dict:
     """dry_run=true runs the real pipeline against the real request/images
-    but skips every database write — use it to preview output first."""
+    but skips every database write — use it to preview output first.
+
+    Mode-agnostic: dispatches to the two-image or single-sheet pipeline based
+    on `analysis_requests.mode`, so this same route already serves both. See
+    `/analyze-single` below for a mode-checked entrypoint under the name the
+    Lovable frontend's single-sheet button actually calls.
+    """
+    try:
+        return service.analyze_request(analysis_request_id, dry_run=dry_run)
+    except Exception as exc:  # noqa: BLE001 - surfaced to the caller as a 500 with detail
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/analyze-single/{analysis_request_id}", dependencies=[Depends(require_api_key)])
+def analyze_single(analysis_request_id: str, dry_run: bool = False) -> dict:
+    """Dedicated entrypoint for the "Analyze Sheet (Single Revision)" button.
+
+    `service.analyze_request` already dispatches on `analysis_requests.mode`
+    (see `/analyze` above), so this is a thin wrapper around the same
+    function — it exists as its own named route because that's what the
+    frontend calls, not because the underlying pipeline differs. It fails
+    loudly with a 400 if the request isn't actually set up for single-sheet
+    mode, rather than silently running whatever `/analyze` would have run.
+    """
+    try:
+        analysis_request = repo.get_analysis_request(analysis_request_id)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=404, detail=f"analysis_request {analysis_request_id!r} not found"
+        ) from exc
+
+    mode = analysis_request.get("mode") or "two_image"
+    if mode != "single_sheet":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"analysis_request {analysis_request_id} has mode={mode!r}, not "
+                "'single_sheet'. Use POST /analyze/{id} for two-image requests, "
+                "or set mode='single_sheet' (and leave new_drawing_id unset) "
+                "before calling this route."
+            ),
+        )
+
     try:
         return service.analyze_request(analysis_request_id, dry_run=dry_run)
     except Exception as exc:  # noqa: BLE001 - surfaced to the caller as a 500 with detail
