@@ -64,6 +64,27 @@ Your job is root-cause analysis and bundling:
   unmentioned just because it's "only" corroboration.
 - Every input classified change's id must appear in exactly one
   `ChangeEvent.bundled_change_ids` list.
+- **Identity-unresolved items get their own honest `ChangeEvent`, never a
+  confident best guess.** If a classified change has
+  `identity_unresolved: true` (flagged but its identity/purpose couldn't be
+  pinned down against a legend, schedule, or legible label — even with both
+  images available), do not bundle it into another event and do not write
+  its `root_cause_summary` as though its identity, or the type of change
+  that happened to it, were settled. Give it its own `ChangeEvent`, set that
+  event's `identity_unresolved: true`, and write the summary plainly: what's
+  flagged, and that what it actually is — and what happened to it — remains
+  unconfirmed. Do not write that an identity-unresolved item "moved," "was
+  added," "was removed," or "was modified": those are specific claims you
+  can't support without knowing what the item is, and a legible annotation
+  sitting near it is not the same as that annotation belonging to it (a real
+  production bug: a "RELOCATED PER RFI #14" note belonging to a separate,
+  identified item got wrongly attributed to a nearby unrelated unlabeled
+  symbol). If you can't confirm an annotation's target, say only that the
+  item is flagged and unconfirmed, and that it sits near the annotation —
+  never that the annotation explains it. `root_cause_summary` will also get
+  a standard disclaimer appended automatically whenever `identity_unresolved`
+  is true — that's a code-level guarantee, not something you need to author,
+  but your own summary should already be written as though it weren't there.
 - Never assert a spatial relationship ("near this area", "adjacent to",
   "next to", "below the X schedule", etc.) about anything unless that
   position is either (a) already stated unambiguously in the classified

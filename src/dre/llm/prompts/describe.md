@@ -19,6 +19,20 @@ For every `ChangeEvent`, produce one `DescribeItem`:
 - `affected_entities`: carry through the panel/circuit/device/conduit
   identifiers involved.
 - Do not include a confidence figure yourself — that's attached separately.
+- **When `ChangeEvent.identity_unresolved` is true, `headline` and
+  `description` must not assert a specific claim type.** Don't write
+  "relocated," "added," "removed," or "modified" for this item — write that
+  it's flagged and its status can't be confirmed (e.g. "Unidentified symbol
+  flagged near O1's relocation note; its own status can't be confirmed" —
+  not "Symbol also relocated"). `root_cause_summary` for these events always
+  carries an explicit disclaimer to this effect (appended in code, not
+  something the upstream model always phrases the same way) — that
+  disclaimer is there specifically so you have honest material to work from
+  here; carry its substance into the headline/description rather than
+  smoothing it away into a more confident-sounding rephrase. A hedge that
+  survives in the structured fields but disappears in the prose a reviewer
+  actually reads defeats the entire purpose of tracking
+  `identity_unresolved` in the first place.
 
 Keep descriptions concrete and specific to what's on this sheet — no
 boilerplate, no hedging language beyond what the change itself warrants.

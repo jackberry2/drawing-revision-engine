@@ -158,6 +158,61 @@ def test_enforce_identity_unresolved_already_other_is_left_alone():
     assert unchanged.category == ChangeCategory.OTHER
 
 
+def test_enforce_identity_unresolved_appends_prose_disclaimer():
+    """The real E-501 bug: category was correctly forced to `other` and
+    identity_unresolved to True, but root_cause_summary prose still asserted
+    the item "also moved" — a mismatch between the honest structured fields
+    and what a human actually reads. The disclaimer must be guaranteed in
+    the text itself, not just implied by the enum/bool fields."""
+    material = [_classified_change("cc1", identity_unresolved=True)]
+    event = ChangeEvent(
+        id="e1",
+        root_cause_change_id="cc1",
+        bundled_change_ids=["cc1"],
+        category=ChangeCategory.DEVICE_RELOCATION,
+        root_cause_summary="An unlabeled bar's cloud sits near O1's note, flagged as also having moved.",
+        identity_unresolved=False,
+    )
+    [fixed] = enforce_identity_unresolved([event], material)
+    assert "identity is unconfirmed" in fixed.root_cause_summary
+    assert fixed.root_cause_summary.startswith(
+        "An unlabeled bar's cloud sits near O1's note, flagged as also having moved."
+    )
+
+
+def test_enforce_identity_unresolved_does_not_duplicate_disclaimer():
+    material = [_classified_change("cc1", identity_unresolved=True)]
+    event = ChangeEvent(
+        id="e1",
+        root_cause_change_id="cc1",
+        bundled_change_ids=["cc1"],
+        category=ChangeCategory.OTHER,
+        root_cause_summary=(
+            "Unidentified symbol flagged. This item's identity is unconfirmed, so the "
+            "specific nature of any change to it — including whether it moved, was "
+            "added, or was modified — cannot be confirmed from this sheet either; "
+            "only that it's flagged."
+        ),
+        identity_unresolved=True,
+    )
+    [unchanged] = enforce_identity_unresolved([event], material)
+    assert unchanged.root_cause_summary.count("identity is unconfirmed") == 1
+
+
+def test_enforce_identity_unresolved_leaves_resolved_summary_untouched():
+    material = [_classified_change("cc1", identity_unresolved=False)]
+    event = ChangeEvent(
+        id="e1",
+        root_cause_change_id="cc1",
+        bundled_change_ids=["cc1"],
+        category=ChangeCategory.DEVICE_ADDED,
+        root_cause_summary="outlet added",
+        identity_unresolved=False,
+    )
+    [unchanged] = enforce_identity_unresolved([event], material)
+    assert unchanged.root_cause_summary == "outlet added"
+
+
 def test_build_pipeline_selects_single_sheet_stages():
     pipeline = build_pipeline(logger=NullStepLogger(), mode="single_sheet")
     assert [s.name for s in pipeline.steps] == [
