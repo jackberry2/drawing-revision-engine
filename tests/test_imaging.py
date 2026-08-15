@@ -81,6 +81,30 @@ def test_rasterize_pdf_first_page_to_png_produces_real_png():
     assert png_bytes.startswith(b"\x89PNG\r\n\x1a\n")
 
 
+def test_rasterize_large_sheet_stays_within_bounded_pixel_dimensions():
+    """The real production incident: a fixed 200 DPI on a real 50"x36" (ARCH
+    E) sheet produced a 10000x7200px raster (~275MB RGBA pixmap) that
+    OOM-killed the Render worker. Large-format sheets are the norm for this
+    application, so output must be bounded regardless of the page's
+    physical size, not scaled up proportionally to it."""
+    import fitz
+
+    doc = fitz.open()
+    # 50in x 36in at 72 points/inch, matching the real sheet that crashed
+    doc.new_page(width=50 * 72, height=36 * 72)
+    large_pdf_bytes = doc.tobytes()
+    doc.close()
+
+    png_bytes = rasterize_pdf_first_page_to_png(large_pdf_bytes, max_dimension=2000)
+
+    import io
+
+    from PIL import Image
+
+    with Image.open(io.BytesIO(png_bytes)) as img:
+        assert max(img.width, img.height) <= 2000
+
+
 def test_normalize_drawing_bytes_rasterizes_pdf():
     image_bytes, media_type = normalize_drawing_bytes(_real_pdf_bytes())
     assert media_type == "image/png"

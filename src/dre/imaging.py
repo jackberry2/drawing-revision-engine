@@ -58,15 +58,31 @@ def extension_for_media_type(media_type: str) -> str:
     return _EXTENSION_BY_MEDIA_TYPE[media_type]
 
 
-def rasterize_pdf_first_page_to_png(pdf_bytes: bytes, *, dpi: int = 200) -> bytes:
+def rasterize_pdf_first_page_to_png(pdf_bytes: bytes, *, max_dimension: int = 2000) -> bytes:
     """Drawing sheets are exported as single-page PDFs in practice; only the
     first page is used. Requires PyMuPDF (pure-pip, no system Poppler
-    dependency — matters for a plain `pip install` deploy target)."""
+    dependency — matters for a plain `pip install` deploy target).
+
+    Targets a bounded longest-edge pixel dimension rather than a fixed DPI.
+    A real production incident: a fixed 200 DPI on a real full-size ARCH E
+    sheet (50"x36") produced a 10000x7200px raster — ~275MB for the raw
+    RGBA pixmap alone — which OOM-killed the Render free-tier worker (the
+    request came back 502, and even /health started failing right after,
+    recovering only once the platform restarted the crashed process).
+    Large-format sheets are the norm for this application, not an edge
+    case, so a fixed DPI was never going to be memory-safe. This also isn't
+    a quality tradeoff: Claude's vision API resizes images server-side to
+    roughly 1568px on the long edge regardless of what's uploaded, so
+    rendering far beyond that bought nothing — 2000px keeps a little
+    headroom above that ceiling without paying for pixels the model
+    discards anyway.
+    """
     import fitz  # PyMuPDF — imported lazily so it's only required when a PDF actually shows up
 
     with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
         page = doc[0]
-        zoom = dpi / 72
+        longest_edge_pt = max(page.rect.width, page.rect.height)
+        zoom = max_dimension / longest_edge_pt if longest_edge_pt > 0 else 1.0
         pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
         return pix.tobytes("png")
 
