@@ -73,38 +73,77 @@ already fine (200-300+ DPI at 2576px). Large-format sheets are the normal
 case for this application, not an edge case — E-501, E-101.3, and E-101.2,
 the three real sheets tested so far, are all large-format.
 
-**Legibility math, derived properly, not cited from an unverified rule of
-thumb.** An earlier version of this section cited "150-300 DPI" for small
-print as if from a checked source — it wasn't; that number was never
-verified the way the Claude API figures above were. Redone from first
-principles: reliable text legibility wants roughly 20-25px of rendered
-character height. At font size `s` (points), required DPI ≈
-`target_px_height × 72 / s`:
+**Legibility math, attempted with real measured data — and the theory it
+was built on didn't survive contact with real behavior.** An earlier
+version of this section cited "150-300 DPI" for small print, then
+"250-300 DPI" derived from an assumed 6-8pt font size — neither was
+grounded in this sheet's actual text. Went to get the real number:
 
-| font size | for 20px char height | for 25px char height |
-|---|---|---|
-| 8pt (top of the architectural-callout range) | 180 DPI | 225 DPI |
-| 6pt (bottom of the range) | 240 DPI | 300 DPI |
+*Path (a), real font-size extraction via PyMuPDF, is closed —
+attempted and found inapplicable, not merely unattempted.* Both PDFs have
+**zero extractable text objects**: `page.get_text()` returns nothing.
+Every character is flattened to vector path outlines (curves), not real
+text runs (confirmed via `page.get_drawings()`: 14,747 / 21,182 raw vector
+paths, zero embedded raster images). There is no font metadata anywhere in
+these files to extract.
 
-So the properly-derived target for 6-8pt body text/notes is **roughly
-250-300 DPI**, not 150 — 150 DPI is below what this math says is needed
-even for the *largest* font in that range. This number is not yet locked
-in as a design decision (see §5) — it needs grounding in either sheets'
-actual measured font sizes or empirical testing, not just this formula in
-isolation; captured here as the corrected derivation, not as a final
-answer.
+*Measured real glyph geometry instead* — clustering nearby vector paths
+into connected blobs and measuring rendered bounding-box heights directly,
+arguably better ground truth than a nominal font size would be anyway. This
+has real limits: whole-page clustering is dominated by continuous connected
+linework (walls, conduits merge huge areas into a few giant blobs via
+touching lines), and clustering can't distinguish "digit" from "the
+triangle symbol outline surrounding it" without real shape recognition —
+out of scope here. One clean measurement did come out of it: E-101.3's
+comms-conduit label text (the actual text read correctly in the good
+run) measures **~15pt** — nearly double the 6-8pt this document had
+assumed without measuring anything.
 
-**A separate, distinct finding: the revision-tag-digit failure (the "4"
-misread as "1") may not be fixable by *any* uniform DPI target.** Revision
-tag digits are visually smaller than the 6-8pt body text this formula
-covers — a single numeral crammed inside a small triangle symbol, likely
-below the font-size floor this calculation even accounts for. Raising
-overall tile resolution to 250-300 DPI may still leave that specific class
-of small, symbol-embedded text under-resolved. If so, fixing it isn't a
-resolution-target question at all — it's a targeted-handling question
-(e.g. rendering detected revision-tag regions at extra magnification
-regardless of the tile's general DPI), a genuinely separate design problem
-from "what DPI should tiles use," not a special case of it.
+*Plugging that in gives a number — 96-120 DPI (20-25px targets) — but the
+formula itself is now directly contradicted, not just imprecise.* That
+same 15pt text was already read correctly by Claude at the sheet's actual
+render resolution, ~51 DPI: `51 × 15/72 ≈ 10.6px` effective character
+height. That's well under the 20-25px "reliable legibility" floor the
+whole formula rests on — a floor borrowed from classical OCR-engine
+guidance, with no basis for assuming it transfers to how a multimodal
+vision-language model actually reads rendered text. Real behavior on this
+exact sheet already contradicts it. The formula isn't just missing a
+better input number; its own premise doesn't hold, so it can't be trusted
+to produce a validated target no matter what font size goes into it.
+
+**A separate, distinct finding — the revision-tag-digit failure (the "4"
+misread as "1") remains unresolved, but now because direct measurement
+failed to resolve it, not because a calculation predicted it.** Attempted
+to isolate the digit's real size the same way; couldn't. One tag region
+(E-101.3's) contained **zero real vector content** at `detect`'s own
+reported bounding box — its self-reported regions aren't precise enough to
+use as crop coordinates for this. Where a tag region did have content
+(E-101.2's), the measured blob (13.5-22pt) almost certainly fuses the
+triangle symbol's outline with the digit inside it, so it's an
+*overestimate* of the true digit size, not a real answer. The original
+finding — that small, symbol-embedded numerals may need handling separate
+from general tile resolution — still stands; it just stands unmeasured
+rather than calculated.
+
+**Conclusion: no single DPI number is defensible from theory alone right
+now, for two independent reasons that both point the same direction** —
+not just the revision-tag case being unresolved. (1) The digit's real size
+still can't be measured cleanly. (2) The formula that would convert *any*
+measured size into a DPI target has already been shown to disagree with
+real observed behavior. Path (a) (font-size extraction) is closed for
+these files. **Empirical testing — path (b) — is now the only remaining
+route to a real number**, not one of two options to weigh: run candidate
+DPI values against a real tiled pass over E-101.2/E-101.3 and check
+directly whether the two known failures (the digit, the coded note)
+actually resolve, rather than continuing to reason forward from a formula
+whose own assumptions don't hold for this technology.
+
+**Interim default for building against, explicitly not a validated
+answer**: something in the **100-150 DPI** range — roughly double the ~51
+DPI that already worked for the one text category directly confirmed
+readable — as a reasonable starting point for tuning once a tiling
+mechanism exists to test against, not a number this document is asserting
+as correct. See §5 and the tuning-harness note in §3b.
 
 **Revised after E-101.2: DPI-from-page-size is a necessary but not
 sufficient predictor.** E-101.2 and E-101.3 are the identical physical
@@ -224,6 +263,18 @@ core_px = tile_edge_px * (1 - overlap_fraction)   # overlap_fraction = 0.15-0.20
 cols = ceil((sheet_width_in  * target_dpi) / core_px)
 rows = ceil((sheet_height_in * target_dpi) / core_px)
 ```
+
+**Build this as a tuning harness from day one, not a shipped fixed
+default.** §2 closed off the theoretical path to a validated DPI number —
+empirical testing against real sheets is the only route left, which means
+the first implementation's job is to make that testing cheap and repeatable,
+not to lock in a guess. Concretely: `target_dpi` should be a parameter the
+tiling entrypoint takes directly (CLI flag or equivalent), not a buried
+constant, so re-running E-101.2/E-101.3 at several candidate values (e.g.
+100, 150 DPI to start, informed by §2's interim range) and checking
+directly whether the known failures resolve — the digit reading correctly,
+the coded note getting extracted — is a fast loop, not a redeploy-and-wait
+cycle each time.
 
 Tiles need overlap — proposed 15-20% of tile size — so a revision cloud
 sitting on a tile boundary isn't split in half or missed by both tiles.
@@ -382,20 +433,26 @@ points.
   immediately, Lovable polls status) is real cross-team scope and needs
   its own separate decision, not something to fold into this design by
   default.
-- **The DPI target is explicitly open, not settled at any number.** §2's
-  legibility math (redone properly, not from an unverified citation) says
-  roughly 250-300 DPI for 6-8pt body text — well above the 150 DPI this
-  document previously proposed, which didn't survive the actual derivation.
-  Separately, revision-tag digits are likely smaller than that 6-8pt floor
-  and may need targeted higher-resolution handling regardless of whatever
-  general tile DPI gets chosen — a distinct design question, not a special
-  case of picking the right number. Two concrete paths to actually
-  resolving the number, neither taken yet: (a) extract real font sizes
-  from the source PDFs directly (PyMuPDF can read this) and compute DPI
-  from measured sizes instead of an assumed 6-8pt range; (b) empirically
-  test candidate DPI values against a real tiled run of E-101.2/E-101.3
-  and check whether the two known failures (the digit, the coded note)
-  actually resolve. Whichever number is eventually chosen, it directly
+- **The DPI target is explicitly open, not settled at any number — and
+  the theoretical path to one is now closed, not just untaken.** §2
+  attempted both paths this document originally proposed. Path (a), real
+  font-size extraction via PyMuPDF, is closed as inapplicable: both PDFs
+  are text-free (all characters flattened to vector outlines), confirmed
+  by direct inspection, not assumed. Geometric measurement from vector
+  paths did produce one real number — E-101.3's label text measures ~15pt,
+  not the assumed 6-8pt — but plugging it into the legibility formula
+  produces a target (96-120 DPI) built on a premise real behavior already
+  contradicts: that same 15pt text was read correctly by Claude at ~10.6px
+  effective character height, well under the formula's own 20-25px floor.
+  Revision-tag digits remain unmeasured, not just unresolved — one tag
+  region contained zero real content at `detect`'s own reported bounding
+  box, and where content existed the measured blob almost certainly fuses
+  the digit with the surrounding triangle symbol's outline. **Path (b),
+  empirical testing, is now the only remaining route to a real number**,
+  not one of two options — captured in §3b as a tuning-harness requirement
+  for the first build (parameterized `target_dpi`, not a buried constant),
+  with **100-150 DPI logged as an interim starting point for tuning, not a
+  validated answer**. Whichever number tuning eventually lands on directly
   determines §3b's tile count and therefore §4's real cost.
 - Does `reason_single` genuinely do better with the full-page image for
   context, or would it also benefit from seeing the relevant tile(s)
