@@ -52,6 +52,52 @@ def analyze(analysis_request_id: str, dry_run: bool):
         click.echo(f"Wrote {len(result['flagged_change_ids'])} row(s) to flagged_changes.")
 
 
+@cli.command("tile-detect")
+@click.argument("pdf_path", type=click.Path(exists=True, path_type=Path))
+@click.option("--sheet-width-in", type=float, required=True)
+@click.option("--sheet-height-in", type=float, required=True)
+@click.option("--dpi", type=float, required=True)
+@click.option("--row", type=int, required=True)
+@click.option("--col", type=int, required=True)
+def tile_detect(
+    pdf_path: Path, sheet_width_in: float, sheet_height_in: float, dpi: float, row: int, col: int
+):
+    """Tuning harness for docs/tiled_analysis_findings.md §3b/§5 — render
+    one tile of a local PDF at a candidate DPI and run the real
+    detect_single stage against it, so candidate DPI values can be tested
+    against real sheets without a Supabase round trip."""
+    from dre.tiling import compute_tile_grid
+    from dre.pipeline.tile_tuning import run_detect_single_on_tile
+
+    tiles = compute_tile_grid(
+        sheet_width_in=sheet_width_in, sheet_height_in=sheet_height_in, target_dpi=dpi
+    )
+    tile = next((t for t in tiles if t.row == row and t.col == col), None)
+    if tile is None:
+        max_row = max(t.row for t in tiles)
+        max_col = max(t.col for t in tiles)
+        raise click.ClickException(
+            f"No tile at row={row} col={col} — grid is {max_row + 1} rows x {max_col + 1} cols"
+        )
+
+    click.echo(
+        f"Tile region: x={tile.region.x:.4f} y={tile.region.y:.4f} "
+        f"w={tile.region.width:.4f} h={tile.region.height:.4f}"
+    )
+    click.echo(f"Render size: {tile.render_width_px}x{tile.render_height_px}px at {dpi} DPI\n")
+
+    result = run_detect_single_on_tile(pdf_path.read_bytes(), tile, dpi=dpi)
+    click.echo(f"{len(result.detections)} detection(s), {len(result.extracted_tables)} table(s)\n")
+    for d in result.detections:
+        click.echo(f"[{d.flagged_by}] region={d.region}")
+        click.echo(f"  {d.geometry_description}\n")
+    for t in result.extracted_tables:
+        click.echo(f"Table: {t.title}")
+        for r in t.rows:
+            click.echo(f"  {r}")
+        click.echo("")
+
+
 @cli.command()
 def eval():
     """Run the eval harness against evals/cases/* and score vs expected output."""
