@@ -464,6 +464,20 @@ points.
   in one tile's overlap zone but not fully inside either tile's core
   region) — worth a small spike against real overlapping-boundary cases
   before committing to the approach.
+- **Residual overlap-margin risk, found while verifying real rendered
+  tiles by eye (not from the coverage-math tests, which can't catch this):
+  a single note wider than the overlap margin could in principle be split
+  across two tiles with neither containing it whole.** Directly checked
+  the real 15%-overlap case (E-101.3, row 2 col 0/1 at 150 DPI) — several
+  notes cut off mid-word at one tile's edge were recovered complete in the
+  overlapping neighbor, so the margin was wide enough for every note on
+  that real sheet. Not observed failing, but not ruled out either: those
+  notes happened to be short (2-4 lines, narrow). A longer single-line
+  note, or a smaller overlap fraction/higher DPI combination that shrinks
+  the physical overlap margin, could plausibly still split content with
+  neither tile whole. Worth a real check against a sheet with wider note
+  text before treating 15% as sufficient in general, not just for this
+  case.
 
 ## Appendix: raw evidence
 
