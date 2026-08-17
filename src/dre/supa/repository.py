@@ -110,6 +110,15 @@ def set_run_status(run_id: str, status: str) -> None:
     get_client().table("pipeline_runs").update({"status": status}).eq("id", run_id).execute()
 
 
+def log_tiling_trigger_diagnostics(run_id: str, diagnostics: dict) -> None:
+    """Passive data collection for docs/tiled_analysis_findings.md §3a — see
+    that doc and dre.tiling_trigger for what this records and why. No
+    commitment to build tiling is implied by logging this."""
+    get_client().table("pipeline_runs").update(
+        {"tiling_trigger_diagnostics": diagnostics}
+    ).eq("id", run_id).execute()
+
+
 def log_step(
     *,
     run_id: str,

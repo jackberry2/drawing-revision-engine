@@ -29,6 +29,7 @@ from dre.pipeline.base import NullStepLogger, PipelineContext
 from dre.pipeline.runner import build_pipeline
 from dre.supa import repository as repo
 from dre.supa.repository import SupabaseStepLogger
+from dre.tiling_trigger import compute_tiling_trigger_diagnostics
 
 
 def _mapped_preview(alert) -> dict[str, Any]:
@@ -123,6 +124,22 @@ def analyze_request(analysis_request_id: str, *, dry_run: bool = False) -> dict[
     # old_drawing above (regardless of which column it came from), so it's
     # what flagged_changes.drawing_id points at.
     result_drawing = new_drawing if new_drawing is not None else old_drawing
+
+    # Passive data collection for docs/tiled_analysis_findings.md §3a — logs
+    # whether that document's tiling trigger rule would fire against this
+    # real run's detect output, regardless of whether tiling itself ever
+    # gets built. See dre.tiling_trigger. Never allowed to break the real
+    # write path below it: this is auxiliary data collection, not part of
+    # the guarantee callers depend on, so a failure here (e.g. the migration
+    # adding pipeline_runs.tiling_trigger_diagnostics not yet applied) is
+    # swallowed rather than failing the whole analysis.
+    try:
+        detect_result = ctx.detect_single_result if mode == "single_sheet" else ctx.detect_result
+        assert detect_result is not None
+        tiling_diagnostics = compute_tiling_trigger_diagnostics(detect_result)
+        repo.log_tiling_trigger_diagnostics(run_id, tiling_diagnostics.model_dump(mode="json"))
+    except Exception:
+        pass
 
     # Clear this request's prior flagged_changes now that the new pipeline
     # run has actually succeeded — a re-analysis always supersedes, never

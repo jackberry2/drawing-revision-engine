@@ -11,9 +11,14 @@ from unittest.mock import patch
 import pytest
 
 from dre import service
+from dre.models.schemas import DetectResult, SingleSheetDetectResult
 
 
 def _fake_pipeline_run(ctx):
+    if ctx.mode == "single_sheet":
+        ctx.detect_single_result = SingleSheetDetectResult(detections=[], extracted_tables=[])
+    else:
+        ctx.detect_result = DetectResult(raw_detections=[], extracted_tables=[])
     return SimpleNamespace(alerts=[], change_events=[])
 
 
@@ -163,12 +168,120 @@ def test_real_write_deletes_prior_flagged_changes_before_writing_new_ones():
         "dre.service.repo.set_analysis_status"
     ), patch(
         "dre.service.repo.delete_flagged_changes_for_analysis_request"
-    ) as mock_delete:
+    ) as mock_delete, patch(
+        "dre.service.repo.log_tiling_trigger_diagnostics"
+    ):
         result = service.analyze_request("ar6", dry_run=False)
 
     mock_delete.assert_called_once_with("ar6")
     assert result["mode"] == "single_sheet"
     assert result["dry_run"] is False
+
+
+def test_real_write_logs_tiling_trigger_diagnostics():
+    """Passive data collection for docs/tiled_analysis_findings.md §3a —
+    every real run logs whether that doc's tiling rule would fire, no
+    commitment to build tiling implied. Must be attached to the real
+    run_id from create_pipeline_run, not the dry-run placeholder string."""
+    analysis_request = {
+        "id": "ar8",
+        "mode": "single_sheet",
+        "old_drawing_id": "d-old",
+        "new_drawing_id": None,
+        "project_id": "p1",
+        "sheet_number": "E-501",
+    }
+    drawings = {"d-old": {"id": "d-old", "file_path": "sheet.png"}}
+
+    with patch("dre.service.repo.get_analysis_request", return_value=analysis_request), patch(
+        "dre.service.repo.get_drawing", side_effect=lambda did: drawings[did]
+    ), patch(
+        "dre.service.repo.download_drawing_image",
+        side_effect=lambda d, dest_dir, basename: dest_dir / f"{basename}.png",
+    ), patch(
+        "dre.service.build_pipeline", return_value=SimpleNamespace(run=_fake_pipeline_run)
+    ), patch(
+        "dre.service.repo.create_pipeline_run", return_value="run-1"
+    ), patch("dre.service.repo.set_run_status"), patch(
+        "dre.service.repo.set_analysis_status"
+    ), patch(
+        "dre.service.repo.delete_flagged_changes_for_analysis_request"
+    ), patch(
+        "dre.service.repo.log_tiling_trigger_diagnostics"
+    ) as mock_log:
+        service.analyze_request("ar8", dry_run=False)
+
+    mock_log.assert_called_once()
+    run_id_arg, diagnostics_arg = mock_log.call_args.args
+    assert run_id_arg == "run-1"
+    assert diagnostics_arg["detection_count"] == 0
+
+
+def test_tiling_trigger_diagnostics_failure_never_breaks_the_real_write():
+    """This is auxiliary data collection, not part of the guarantee callers
+    depend on — e.g. the migration adding pipeline_runs.tiling_trigger_
+    diagnostics not yet being applied must not take down real
+    flagged_changes writes. A real production risk this session already
+    hit once with an unrelated column (the null-drawing-id uuid bug), so
+    this failure mode is worth guarding against explicitly, not assumed
+    away."""
+    analysis_request = {
+        "id": "ar10",
+        "mode": "single_sheet",
+        "old_drawing_id": "d-old",
+        "new_drawing_id": None,
+        "project_id": "p1",
+        "sheet_number": "E-501",
+    }
+    drawings = {"d-old": {"id": "d-old", "file_path": "sheet.png"}}
+
+    with patch("dre.service.repo.get_analysis_request", return_value=analysis_request), patch(
+        "dre.service.repo.get_drawing", side_effect=lambda did: drawings[did]
+    ), patch(
+        "dre.service.repo.download_drawing_image",
+        side_effect=lambda d, dest_dir, basename: dest_dir / f"{basename}.png",
+    ), patch(
+        "dre.service.build_pipeline", return_value=SimpleNamespace(run=_fake_pipeline_run)
+    ), patch(
+        "dre.service.repo.create_pipeline_run", return_value="run-1"
+    ), patch("dre.service.repo.set_run_status"), patch(
+        "dre.service.repo.set_analysis_status"
+    ), patch(
+        "dre.service.repo.delete_flagged_changes_for_analysis_request"
+    ), patch(
+        "dre.service.repo.log_tiling_trigger_diagnostics",
+        side_effect=Exception("column does not exist"),
+    ):
+        result = service.analyze_request("ar10", dry_run=False)
+
+    assert result["dry_run"] is False
+    assert result["mode"] == "single_sheet"
+
+
+def test_dry_run_never_logs_tiling_trigger_diagnostics():
+    analysis_request = {
+        "id": "ar9",
+        "mode": "single_sheet",
+        "old_drawing_id": "d-old",
+        "new_drawing_id": None,
+        "project_id": "p1",
+        "sheet_number": "E-501",
+    }
+    drawings = {"d-old": {"id": "d-old", "file_path": "sheet.png"}}
+
+    with patch("dre.service.repo.get_analysis_request", return_value=analysis_request), patch(
+        "dre.service.repo.get_drawing", side_effect=lambda did: drawings[did]
+    ), patch(
+        "dre.service.repo.download_drawing_image",
+        side_effect=lambda d, dest_dir, basename: dest_dir / f"{basename}.png",
+    ), patch(
+        "dre.service.build_pipeline", return_value=SimpleNamespace(run=_fake_pipeline_run)
+    ), patch(
+        "dre.service.repo.log_tiling_trigger_diagnostics"
+    ) as mock_log:
+        service.analyze_request("ar9", dry_run=True)
+
+    mock_log.assert_not_called()
 
 
 def test_dry_run_never_deletes_prior_flagged_changes():

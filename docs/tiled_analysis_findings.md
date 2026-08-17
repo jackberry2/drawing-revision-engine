@@ -233,17 +233,36 @@ its own item in §5.
 
 ## 4. Cost and latency impact
 
-Tiling multiplies `detect_single`'s call count by the tile grid size (9x
-for the 3x3 case above) — that's the dominant cost increase, since
-`classify`/`reason_single`/`describe` stay at roughly today's call count
-and `confidence` already scores one call per `ChangeEvent` regardless of
-detection source. Concretely, per large sheet: 9 detect calls instead of 1,
-run either sequentially (simpler, adds real latency — plausibly 30-60s
-more per sheet at today's per-call latency) or in parallel (faster
-wall-clock, more complexity, and worth checking Anthropic rate limits
-before committing to it). This needs a real dollar-cost estimate against
-actual detect_single token usage before implementation, not just the
-multiplier — worth pulling from `pipeline_steps` on a few more real runs.
+**Revised for the retry-driven design (§3a) — cost isn't a flat multiplier,
+it's bimodal.** The original framing ("9x detect calls for every large
+sheet") assumed tiling always ran once a sheet passed a size threshold.
+Under the retry-driven trigger, cost is per-*outcome*, not per-*sheet*:
+
+- **Sheets the §3a rule doesn't fire on** (e.g. E-101.3): pay exactly
+  today's cost. One `detect`/`detect_single` call, nothing else changes.
+- **Sheets the rule fires on** (e.g. E-101.2): pay today's cost *plus* the
+  tiled retry — the "wasted" first pass, plus the tile grid's call count
+  (9x for a 3x3 grid), plus whatever latency that adds sequentially or in
+  parallel (unresolved in §5) — landing at roughly 30-60s+ more per sheet
+  at today's per-call latency, on top of the baseline call.
+
+**The real number this section needs is the trigger rate — how often real
+sheets actually fire the rule — and that's currently unknown, not a
+placeholder worth guessing.** Total cost/latency impact across a real
+population is `(sheets that don't fire × baseline cost) + (sheets that
+fire × (baseline + tiled cost))`, and the whole equation is dominated by
+that unknown fraction. Guessing a rate here would make this section look
+more resolved than it is.
+
+**This is no longer blocked on building tiling to start measuring.** §3a's
+trigger rule is now computed and logged passively on every real analysis
+run (`dre.tiling_trigger.compute_tiling_trigger_diagnostics`, persisted to
+`pipeline_runs.tiling_trigger_diagnostics` via migration
+`0004_tiling_trigger_diagnostics.sql`), regardless of whether tiling
+itself exists yet. Once enough real sheets have run through it, the
+trigger rate becomes a real observed number instead of a guess, and this
+section can be filled in properly rather than estimated from 2 data
+points.
 
 ## 5. Open questions before building this
 
@@ -266,9 +285,11 @@ multiplier — worth pulling from `pipeline_steps` on a few more real runs.
   titles, `<0.5` quoted_fraction, `<3` detection-count floor) against edge
   cases the sample doesn't cover — e.g. a sheet with 3-5 detections that's
   genuinely sparse (nothing worth quoting) rather than illegible could
-  still trip the quoted_fraction condition as a false positive. Needs more
-  real sheets before the thresholds themselves are trustworthy, not just
-  the direction of the signal.
+  still trip the quoted_fraction condition as a false positive. Now
+  passively collected on every real run (§4), so this stops being blocked
+  on manually running more sheets through by hand — but the thresholds
+  themselves haven't been re-examined against any data beyond the original
+  two yet, so "not settled" still holds until that review happens.
 - **Async/polling API contract — explicitly deferred, not decided
   here.** §3e's duration-hint is the minimal version shipping with tiling;
   a real fix that removes the timeout risk structurally (return
