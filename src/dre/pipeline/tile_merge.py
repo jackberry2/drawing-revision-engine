@@ -18,6 +18,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from pydantic import BaseModel
+
 from dre.models.schemas import SingleSheetDetection
 
 # Distinctive alphanumeric codes (tag numbers, entity/room labels) - "B5",
@@ -87,25 +89,39 @@ def likely_same_element(a: SingleSheetDetection, b: SingleSheetDetection) -> boo
     return len(shared) >= MIN_SHARED_TOKENS
 
 
-def find_merge_candidates(
+def _adjacent_cross_tile_pairs(
     detections: list[TiledDetection],
 ) -> list[tuple[TiledDetection, TiledDetection]]:
-    """Cross-tile candidate pairs likely representing the same real
-    element: adjacent (or same) tiles per the known-correct grid, AND
-    enough shared content to pass `likely_same_element`. Same-tile pairs
-    are excluded - `detect_single` already treats same-image detections as
-    distinct entries in one coherent response; reconciling those is
-    `reason_single`'s existing bundling job, not this module's."""
-    candidates = []
+    """Every cross-tile pair worth evaluating at all: adjacent tiles per
+    the known-correct grid, excluding same-tile pairs (`detect_single`
+    already treats same-image detections as distinct entries in one
+    coherent response; reconciling those is `reason_single`'s existing
+    bundling job, not this module's). Does NOT filter by content overlap -
+    that's `find_merge_candidates`'s job when the goal is an actual merge
+    decision, versus `compute_merge_diagnostics`'s job when the goal is
+    logging what *every* evaluated pair scored, matched or not."""
+    pairs = []
     for i, a in enumerate(detections):
         for b in detections[i + 1 :]:
             if a.tile_row == b.tile_row and a.tile_col == b.tile_col:
                 continue
             if not tiles_are_adjacent(a.tile_row, a.tile_col, b.tile_row, b.tile_col):
                 continue
-            if likely_same_element(a.detection, b.detection):
-                candidates.append((a, b))
-    return candidates
+            pairs.append((a, b))
+    return pairs
+
+
+def find_merge_candidates(
+    detections: list[TiledDetection],
+) -> list[tuple[TiledDetection, TiledDetection]]:
+    """Cross-tile candidate pairs likely representing the same real
+    element: adjacent (or same) tiles per the known-correct grid, AND
+    enough shared content to pass `likely_same_element`."""
+    return [
+        (a, b)
+        for a, b in _adjacent_cross_tile_pairs(detections)
+        if likely_same_element(a.detection, b.detection)
+    ]
 
 
 def group_merge_candidates(detections: list[TiledDetection]) -> list[list[TiledDetection]]:
@@ -137,3 +153,68 @@ def group_merge_candidates(detections: list[TiledDetection]) -> list[list[TiledD
     for i, d in enumerate(detections):
         groups.setdefault(find(i), []).append(d)
     return list(groups.values())
+
+
+class MergeCandidatePairDiagnostics(BaseModel):
+    tile_a: str
+    tile_b: str
+    detection_id_a: str
+    detection_id_b: str
+    shared_tokens: list[str]
+    matched: bool
+
+
+class MergeDiagnostics(BaseModel):
+    """Passive calibration data for MIN_SHARED_TOKENS (docs/tiled_analysis_
+    findings.md §5) — logged the same way §3a's tiling_trigger diagnostics
+    are, so the threshold can eventually be tuned against accumulated real
+    evidence instead of the current 1-known-good/1-known-miss baseline.
+    `pairs` covers EVERY adjacent cross-tile pair evaluated, not just the
+    ones that cleared MIN_SHARED_TOKENS — a pair that scored just under
+    threshold is exactly the data point a future retuning decision needs,
+    so it's logged with `matched=False` rather than silently dropped.
+    Unlike §3a's trigger (which runs on every real single-image detect
+    call already happening in production), there is no real multi-tile
+    production flow yet for this to attach to passively — see §5. This is
+    the pure computation, ready to log the moment one exists; today it's
+    exercised through the tuning harness (`dre tile-detect-grid`), not
+    production traffic.
+    """
+
+    total_detections: int
+    evaluated_pairs: int
+    matched_pairs: int
+    groups: int
+    multi_member_groups: int
+    pairs: list[MergeCandidatePairDiagnostics]
+
+
+def compute_merge_diagnostics(detections: list[TiledDetection]) -> MergeDiagnostics:
+    evaluated_pairs = _adjacent_cross_tile_pairs(detections)
+    groups = group_merge_candidates(detections)
+    pairs = []
+    matched_count = 0
+    for a, b in evaluated_pairs:
+        shared = extract_content_tokens(a.detection.geometry_description) & extract_content_tokens(
+            b.detection.geometry_description
+        )
+        matched = len(shared) >= MIN_SHARED_TOKENS
+        matched_count += matched
+        pairs.append(
+            MergeCandidatePairDiagnostics(
+                tile_a=f"({a.tile_row},{a.tile_col})",
+                tile_b=f"({b.tile_row},{b.tile_col})",
+                detection_id_a=a.detection.id,
+                detection_id_b=b.detection.id,
+                shared_tokens=sorted(shared),
+                matched=matched,
+            )
+        )
+    return MergeDiagnostics(
+        total_detections=len(detections),
+        evaluated_pairs=len(pairs),
+        matched_pairs=matched_count,
+        groups=len(groups),
+        multi_member_groups=sum(1 for g in groups if len(g) > 1),
+        pairs=pairs,
+    )

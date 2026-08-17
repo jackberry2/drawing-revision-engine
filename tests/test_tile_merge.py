@@ -23,6 +23,7 @@ directions:
 from dre.models.schemas import SingleSheetDetection
 from dre.pipeline.tile_merge import (
     TiledDetection,
+    compute_merge_diagnostics,
     extract_content_tokens,
     find_merge_candidates,
     group_merge_candidates,
@@ -224,3 +225,46 @@ def test_group_merge_candidates_returns_singletons_for_unrelated_detections():
     groups = group_merge_candidates(detections)
     assert len(groups) == 2
     assert all(len(g) == 1 for g in groups)
+
+
+def test_compute_merge_diagnostics_on_the_real_e101_2_calibration_case():
+    """The current calibration baseline (§5): this exact real case is the
+    '1 known-good' data point - candidate pairs get evaluated (cross-tile,
+    content overlap computed) but none clear the threshold, so no group
+    ends up with multiple members."""
+    detections = [
+        TiledDetection(tile_row=1, tile_col=1, detection=_E101_2_CLOUD_1),
+        TiledDetection(tile_row=1, tile_col=1, detection=_E101_2_TAG_1),
+        TiledDetection(tile_row=1, tile_col=2, detection=_E101_2_CLOUD_2),
+        TiledDetection(tile_row=1, tile_col=2, detection=_E101_2_TAG_2),
+    ]
+    diagnostics = compute_merge_diagnostics(detections)
+
+    assert diagnostics.total_detections == 4
+    assert diagnostics.multi_member_groups == 0
+    # tag1-tag2 is a real evaluated candidate (adjacent tiles, shares "B5")
+    # that correctly fails the threshold - confirm it shows up in the
+    # diagnostics for calibration purposes, not just that it was rejected.
+    tag_pair = [
+        p
+        for p in diagnostics.pairs
+        if {p.detection_id_a, p.detection_id_b} == {"tag1", "tag2"}
+    ]
+    assert len(tag_pair) == 1
+    assert tag_pair[0].shared_tokens == ["B5"]
+
+
+def test_compute_merge_diagnostics_on_the_real_e101_3_calibration_case():
+    """The current calibration baseline (§5): this exact real case is the
+    '1 known-miss' data point - the real cluster (confirmed the same
+    physical cloud by directly viewing both tiles) doesn't produce a
+    multi-member group, logged here as calibration data, not hidden."""
+    detections = [
+        TiledDetection(tile_row=1, tile_col=1, detection=_E101_3_TAG_R1C1),
+        TiledDetection(tile_row=1, tile_col=0, detection=_E101_3_CLOUD_R1C0),
+        TiledDetection(tile_row=1, tile_col=0, detection=_E101_3_LABELS_R1C0),
+    ]
+    diagnostics = compute_merge_diagnostics(detections)
+
+    assert diagnostics.total_detections == 3
+    assert diagnostics.multi_member_groups == 0

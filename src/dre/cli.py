@@ -98,6 +98,67 @@ def tile_detect(
         click.echo("")
 
 
+@cli.command("tile-detect-grid")
+@click.argument("pdf_path", type=click.Path(exists=True, path_type=Path))
+@click.option("--sheet-width-in", type=float, required=True)
+@click.option("--sheet-height-in", type=float, required=True)
+@click.option("--dpi", type=float, required=True)
+@click.option("--tile-edge-px", type=int, default=None, help="Override the default tile edge size (px).")
+@click.option("--overlap-fraction", type=float, default=None, help="Override the default tile overlap fraction.")
+def tile_detect_grid(
+    pdf_path: Path,
+    sheet_width_in: float,
+    sheet_height_in: float,
+    dpi: float,
+    tile_edge_px: int | None,
+    overlap_fraction: float | None,
+):
+    """Real-accumulation path for §5's merge-threshold calibration data
+    (§3c) — runs detect_single against EVERY tile in the grid (real API
+    cost scales with tile count, §4 — deliberate use only) and reports
+    §3c's merge diagnostics across the full result: candidate pairs
+    evaluated, which tokens they shared, and how many groups actually
+    merged. There's no production tiled flow to log this from passively
+    yet; this is how more real known-good/known-miss data points get
+    collected until one exists."""
+    from dre.pipeline.tile_merge import compute_merge_diagnostics
+    from dre.pipeline.tile_tuning import run_detect_single_on_grid
+    from dre.tiling import DEFAULT_OVERLAP_FRACTION, DEFAULT_TILE_EDGE_PX, compute_tile_grid
+
+    grid_kwargs = {
+        "tile_edge_px": tile_edge_px if tile_edge_px is not None else DEFAULT_TILE_EDGE_PX,
+        "overlap_fraction": (
+            overlap_fraction if overlap_fraction is not None else DEFAULT_OVERLAP_FRACTION
+        ),
+    }
+    tiles = compute_tile_grid(
+        sheet_width_in=sheet_width_in, sheet_height_in=sheet_height_in, target_dpi=dpi, **grid_kwargs
+    )
+    click.echo(f"Grid: {len(tiles)} tiles at {dpi} DPI — running detect_single on each...\n")
+
+    detections = run_detect_single_on_grid(
+        pdf_path.read_bytes(),
+        sheet_width_in=sheet_width_in,
+        sheet_height_in=sheet_height_in,
+        dpi=dpi,
+        **grid_kwargs,
+    )
+    click.echo(f"{len(detections)} total detections across the grid.\n")
+
+    diagnostics = compute_merge_diagnostics(detections)
+    click.echo(
+        f"Merge diagnostics: {diagnostics.evaluated_pairs} adjacent pair(s) evaluated, "
+        f"{diagnostics.matched_pairs} matched MIN_SHARED_TOKENS, "
+        f"{diagnostics.groups} final group(s), {diagnostics.multi_member_groups} merged "
+        f"(multi-member) group(s)\n"
+    )
+    for p in diagnostics.pairs:
+        click.echo(
+            f"  {'MATCH ' if p.matched else 'no match '}tile{p.tile_a}:{p.detection_id_a} <-> "
+            f"tile{p.tile_b}:{p.detection_id_b}  shared_tokens={p.shared_tokens}"
+        )
+
+
 @cli.command()
 def eval():
     """Run the eval harness against evals/cases/* and score vs expected output."""

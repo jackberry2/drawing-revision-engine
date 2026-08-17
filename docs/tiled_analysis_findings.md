@@ -435,6 +435,17 @@ confirmed against real data yet (today's real cross-tile cases were both
 negative/miss cases) — worth specifically looking for as more real sheets
 run through the tuning harness.
 
+**Calibration data collection now exists (`compute_merge_diagnostics`,
+`dre tile-detect-grid`).** Every adjacent cross-tile pair the grid produces
+gets evaluated and logged — including pairs that don't clear
+`MIN_SHARED_TOKENS`, with their actual shared-token count — not just the
+pairs that already passed. This is what makes the "1 known-good, 1
+known-miss" baseline in §5 an actual accumulating dataset rather than two
+one-off manual observations: every future run through the harness adds
+more real evaluated pairs (matched and unmatched) to tune the threshold
+against later. As of this writing it's only reachable via the harness, not
+production traffic — see §5 for why, and what production wiring would take.
+
 ### 3d. Reason/classify/confidence/describe stay mostly as-is
 
 Everything downstream of `detect_single` already treats detections as a
@@ -604,19 +615,27 @@ points.
 - How should tile size interact with different real sheet sizes (ARCH D
   vs ARCH E vs letter) — a fixed grid size, or computed per-sheet as
   proposed in §3b?
-- **Merge/dedup (§3c) is built (v1), not still an open blocker — but its
-  own real limits are now open items.** Built as tile-adjacency-scoped
-  candidates + content-based confirmation, specifically because a pure
-  geometric approach was directly undermined by the bounding-box finding.
-  Validated against the real E-101.2 false-positive risk (two distinct
-  "B5"-tagged clouds correctly kept separate). Not validated against a
-  genuine positive case yet — both real cross-tile cases tested so far
-  (E-101.3's cluster split, a cloud vs. its own tag) are known misses
-  under the current `MIN_SHARED_TOKENS=2` threshold, landing safely
-  (under- not over-merging) but real gaps. Worth specifically hunting for
-  a genuine positive real case as more sheets run through the harness,
-  and worth revisiting the threshold once one exists to test against —
-  right now there's no real positive example to tune it with.
+- **Merge/dedup (§3c) is built (v1) with a specific, logged calibration
+  baseline — deliberately not tuned yet.** `MIN_SHARED_TOKENS=2` is
+  currently verified on exactly one data point on each side: **1
+  known-good** (E-101.2's two distinct "B5"-tagged clouds correctly kept
+  separate — the real false-positive risk this threshold exists to guard
+  against) and **1 known-miss** (E-101.3's real cluster, confirmed the
+  same physical cloud by directly viewing both tiles, doesn't merge — the
+  shared "4" bulletin-tag number alone isn't trusted, for the same reason
+  the E-101.2 case shouldn't have been). Both land in the safer direction
+  (under-merging, nothing silently conflated), but one hit on each side is
+  not enough signal to move the number responsibly — the same reasoning
+  that kept the DPI target from being locked in off a single sheet. Not
+  adjusting `MIN_SHARED_TOKENS` until more real evidence exists to tune it
+  against. **This is no longer blocked on manual one-off checks either**:
+  `compute_merge_diagnostics` (§3c) now logs every adjacent cross-tile pair
+  evaluated by the tuning harness — matched or not, with its actual
+  shared-token count — the same passive-accumulation pattern §3a's trigger
+  rule already uses in production. It's reachable today via `dre
+  tile-detect-grid` against real sheets; it is NOT yet reachable from real
+  production traffic, because no production tiled flow exists yet to
+  generate pairs from (see the end-to-end status note below).
 - **Residual overlap-margin risk, found while verifying real rendered
   tiles by eye (not from the coverage-math tests, which can't catch this):
   a single note wider than the overlap margin could in principle be split
@@ -635,6 +654,47 @@ points.
   the dedup finding is about *recombining* an element that legitimately
   spans multiple tiles even when each tile's portion is intact. Both are
   real, both point at §3c, but they're different failure mechanisms.)
+- **End-to-end status: what's left before this is a usable feature, not
+  just validated pieces.** Three honestly different buckets:
+  - **Solid and tested, ready to build on:** grid math (`tiling.py`, pure
+    and tested), per-tile rasterization (`imaging.py`, tested and
+    eye-verified against a real rendered tile — see §3b/§1), the 150 DPI
+    target (validated 2/2 real sheets, no longer interim — see above),
+    §3a's trigger rule (passively logged on every real production run
+    today, via `pipeline_runs.tiling_trigger_diagnostics`), and §3c's
+    merge logic v1 (tested against real E-101.2/E-101.3 data, known-safe
+    direction, now with its own passive calibration-diagnostics logging
+    via the harness).
+  - **Documented requirements, not yet built:** §3e's duration-hint to
+    Lovable (needed once real requests can take tile-count-multiplied
+    latency, currently undocumented to the caller) and §3f's
+    `ThreadPoolExecutor` for parallel tile calls (`llm/client.py` is fully
+    synchronous today — sequential tile calls work in the harness but
+    would multiply real request latency by tile count in production
+    without this).
+  - **Genuine gap, not yet designed at all:** there is currently no
+    orchestration code connecting the pieces above into the real request
+    path. `service.py`/`analyze_request`/`PipelineContext` have zero
+    awareness of tiling — nothing reads §3a's logged `would_trigger` value
+    to actually branch into a tiled flow instead of the existing
+    single-image call. And `extracted_tables` merging across tiles (flagged
+    as needed in §3c's opening paragraph) has no design sketched and no
+    code written — only per-detection merge/dedup has been built; a
+    schedule table split across tiles has no handling yet.
+
+  **So: not yet a small "wire it in" step.** What exists is a complete,
+  independently-tested toolkit (grid, rasterization, trigger signal, merge
+  logic) plus one production integration point already live (§3a's passive
+  trigger logging). Turning that into an actual tiled analysis path still
+  needs: (1) branching logic in `service.py` that checks the trigger signal
+  and, when it fires, runs the tile grid → per-tile `detect_single` → merge
+  sequence instead of the single-image path; (2) parallel tile execution
+  (§3f) so that path doesn't multiply latency unacceptably; (3) the
+  duration-hint contract change (§3e) so Lovable isn't caught by a timeout
+  when it does; (4) `extracted_tables` cross-tile merging, currently
+  undesigned. None of these four are large individually, but none of them
+  exist yet either — the honest answer to "is a piece left" is yes, the
+  orchestration layer itself, not a finishing touch on what's built.
 
 ## Appendix: raw evidence
 
