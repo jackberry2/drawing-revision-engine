@@ -65,16 +65,46 @@ tier — **2576px max long edge, 4784 max visual tokens**. Images larger than
 that are resized down server-side regardless of what's sent; there is no
 way to push more effective resolution into a single image call than this.
 
-For a 50"-wide sheet, 2576px works out to **~51 DPI-equivalent**. Standard
-document-legibility guidance puts reliable small-print reading (6-8pt
-architectural callouts, revision-tag digits) at roughly 150-300 DPI. This
-sheet's full-page image is running at somewhere between a third and a
-sixth of what fine print needs — not a marginal shortfall, a real gap. And
-this scales with sheet size: a 34"x22" ARCH D sheet lands around 76 DPI at
-the same ceiling; a letter/tabloid sheet is already fine (200-300+ DPI at
-2576px). Large-format sheets are the normal case for this application, not
-an edge case — E-501, E-101.3, and E-101.2, the three real sheets tested so
-far, are all large-format.
+For a 50"-wide sheet, 2576px works out to **~51 DPI-equivalent** — not a
+marginal shortfall from what small print needs, a real gap (see the
+legibility derivation below). This scales with sheet size: a 34"x22" ARCH D
+sheet lands around 76 DPI at the same ceiling; a letter/tabloid sheet is
+already fine (200-300+ DPI at 2576px). Large-format sheets are the normal
+case for this application, not an edge case — E-501, E-101.3, and E-101.2,
+the three real sheets tested so far, are all large-format.
+
+**Legibility math, derived properly, not cited from an unverified rule of
+thumb.** An earlier version of this section cited "150-300 DPI" for small
+print as if from a checked source — it wasn't; that number was never
+verified the way the Claude API figures above were. Redone from first
+principles: reliable text legibility wants roughly 20-25px of rendered
+character height. At font size `s` (points), required DPI ≈
+`target_px_height × 72 / s`:
+
+| font size | for 20px char height | for 25px char height |
+|---|---|---|
+| 8pt (top of the architectural-callout range) | 180 DPI | 225 DPI |
+| 6pt (bottom of the range) | 240 DPI | 300 DPI |
+
+So the properly-derived target for 6-8pt body text/notes is **roughly
+250-300 DPI**, not 150 — 150 DPI is below what this math says is needed
+even for the *largest* font in that range. This number is not yet locked
+in as a design decision (see §5) — it needs grounding in either sheets'
+actual measured font sizes or empirical testing, not just this formula in
+isolation; captured here as the corrected derivation, not as a final
+answer.
+
+**A separate, distinct finding: the revision-tag-digit failure (the "4"
+misread as "1") may not be fixable by *any* uniform DPI target.** Revision
+tag digits are visually smaller than the 6-8pt body text this formula
+covers — a single numeral crammed inside a small triangle symbol, likely
+below the font-size floor this calculation even accounts for. Raising
+overall tile resolution to 250-300 DPI may still leave that specific class
+of small, symbol-embedded text under-resolved. If so, fixing it isn't a
+resolution-target question at all — it's a targeted-handling question
+(e.g. rendering detected revision-tag regions at extra magnification
+regardless of the tile's general DPI), a genuinely separate design problem
+from "what DPI should tiles use," not a special case of it.
 
 **Revised after E-101.2: DPI-from-page-size is a necessary but not
 sufficient predictor.** E-101.2 and E-101.3 are the identical physical
@@ -171,14 +201,32 @@ thresholds against edge cases the sample doesn't cover.
 
 ### 3b. Grid with overlap, sized to the DPI target
 
-For a sheet that needs tiling, compute a grid (rows x cols) such that each
-tile's physical area, rendered at up to 2576px on its long edge, hits the
-target DPI (150 DPI proposed as a starting point — worth validating against
-a few more real dense sheets before locking in). For the 50"x36" E-101.3
-sheet at a 150 DPI target, that's roughly a 3x3 grid (each tile covering
-~17"x12" of physical sheet). Tiles need overlap — proposed 15-20% of tile
-size — so a revision cloud sitting on a tile boundary isn't split in half
-or missed by both tiles.
+**Per-tile pixel ceiling, corrected: ~1900px per side for a square tile,
+not 2576px.** Claude's high-resolution tier has two *simultaneous*
+constraints, not one: 2576px max long edge, **and** 4784 max visual tokens
+(28×28px patches ≈ 3,750,656 px² total). 2576px is only reachable at an
+extreme aspect ratio (Anthropic's own documented example downsizes a 16:9
+image to 2576×1449, not 2576×2576) — a square tile hitting 2576 on both
+sides would need ~8,464 tokens, 77% over budget. For a square tile the real
+ceiling is `√3,750,656 ≈ 1936.7px`. Since the token formula uses
+`⌈width/28⌉ × ⌈height/28⌉` (ceiling, not exact division), a render sized
+right at that boundary risks tipping over after rounding — so the safe
+working number is **1900px**, not the theoretical 1936.7, leaving real
+margin rather than an assumption that never gets tested until it fails.
+
+Tile grid sizing, as a function of whatever DPI target §5 eventually
+settles (deliberately not hardcoded here):
+
+```
+tile_edge_px = 1900              # safe square-tile ceiling, margin included
+core_px = tile_edge_px * (1 - overlap_fraction)   # overlap_fraction = 0.15-0.20
+
+cols = ceil((sheet_width_in  * target_dpi) / core_px)
+rows = ceil((sheet_height_in * target_dpi) / core_px)
+```
+
+Tiles need overlap — proposed 15-20% of tile size — so a revision cloud
+sitting on a tile boundary isn't split in half or missed by both tiles.
 
 ### 3c. Per-tile detection, then merge
 
@@ -231,6 +279,42 @@ about it. That's a real cross-team API contract change and needs its own
 decision, not something to fold into this design by default — tracked as
 its own item in §5.
 
+### 3f. Parallel tile execution — required, and not automatic
+
+**Sequential vs. parallel changes latency only, not cost** — same call
+count, same tokens, same dollars either way; this is purely a wall-clock
+tradeoff, not a cost one. At tile counts in the 20-70 range (§3b, once a
+real DPI target is set), sequential execution is not a reasonable fallback
+— it would add many minutes of pure sequential wait on top of today's
+baseline, compounding directly into §3e's timeout-risk concern rather than
+just being a latency nuisance. **Parallel is required, not optional, at
+this scale.**
+
+Two things checked directly rather than assumed:
+
+- **Anthropic rate limits — verified against this account's real headers,
+  not guessed**: `anthropic-ratelimit-requests-limit: 10000`,
+  `anthropic-ratelimit-tokens-limit: 12000000` (input) — 20-70 simultaneous
+  tile calls is nowhere near either ceiling. Not a constraint worth
+  designing around.
+- **This codebase cannot do this today without a real code change — not
+  automatic.** `llm/client.py` uses the fully synchronous `anthropic.Anthropic`
+  client (no `async def` anywhere in the file), and `render.yaml`'s start
+  command (`uvicorn dre.api:app --host 0.0.0.0 --port $PORT`) has no
+  `--workers` flag — a single worker process. A synchronous Claude call
+  blocks that process for its full duration regardless of design intent;
+  "parallel" isn't achieved by deciding it should be. The natural fix given
+  the existing synchronous style is a bounded `ThreadPoolExecutor` around
+  the existing `call_structured` calls (Python threads release the GIL
+  during network I/O wait, so this works without an async rewrite) — with
+  a bounded worker count (e.g. 5-8 concurrent, not all 20-70 at once), both
+  to be a reasonable API citizen and because concurrent-connection behavior
+  on a small Render instance hasn't been tested, not confirmed safe by
+  assumption.
+
+This is a real implementation requirement to scope into the build, not a
+design preference noted in passing.
+
 ## 4. Cost and latency impact
 
 **Revised for the retry-driven design (§3a) — cost isn't a flat multiplier,
@@ -242,9 +326,11 @@ Under the retry-driven trigger, cost is per-*outcome*, not per-*sheet*:
   today's cost. One `detect`/`detect_single` call, nothing else changes.
 - **Sheets the rule fires on** (e.g. E-101.2): pay today's cost *plus* the
   tiled retry — the "wasted" first pass, plus the tile grid's call count
-  (9x for a 3x3 grid), plus whatever latency that adds sequentially or in
-  parallel (unresolved in §5) — landing at roughly 30-60s+ more per sheet
-  at today's per-call latency, on top of the baseline call.
+  (§3b, sized to whatever DPI target §5 eventually settles — likely well
+  above the original "9x" estimate once §2's corrected legibility math and
+  §3b's corrected per-tile ceiling are both accounted for), run in parallel
+  per §3f's bounded-`ThreadPoolExecutor` requirement rather than
+  sequentially.
 
 **The real number this section needs is the trigger rate — how often real
 sheets actually fire the rule — and that's currently unknown, not a
@@ -296,9 +382,21 @@ points.
   immediately, Lovable polls status) is real cross-team scope and needs
   its own separate decision, not something to fold into this design by
   default.
-- Is 150 DPI the right target, or should it be tuned against more real
-  dense sheets first? E-101.3 is one data point.
-- Sequential vs. parallel tile calls — latency/cost/complexity tradeoff.
+- **The DPI target is explicitly open, not settled at any number.** §2's
+  legibility math (redone properly, not from an unverified citation) says
+  roughly 250-300 DPI for 6-8pt body text — well above the 150 DPI this
+  document previously proposed, which didn't survive the actual derivation.
+  Separately, revision-tag digits are likely smaller than that 6-8pt floor
+  and may need targeted higher-resolution handling regardless of whatever
+  general tile DPI gets chosen — a distinct design question, not a special
+  case of picking the right number. Two concrete paths to actually
+  resolving the number, neither taken yet: (a) extract real font sizes
+  from the source PDFs directly (PyMuPDF can read this) and compute DPI
+  from measured sizes instead of an assumed 6-8pt range; (b) empirically
+  test candidate DPI values against a real tiled run of E-101.2/E-101.3
+  and check whether the two known failures (the digit, the coded note)
+  actually resolve. Whichever number is eventually chosen, it directly
+  determines §3b's tile count and therefore §4's real cost.
 - Does `reason_single` genuinely do better with the full-page image for
   context, or would it also benefit from seeing the relevant tile(s)
   directly for a bundled detection group? Untested.
