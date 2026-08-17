@@ -15,6 +15,11 @@ type-sniffed from its actual bytes, and PDFs are rasterized to PNG first.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from dre.tiling import TileSpec
+
 _PDF_MAGIC = b"%PDF-"
 
 _MEDIA_TYPE_BY_SIGNATURE: list[tuple[bytes, str]] = [
@@ -97,6 +102,36 @@ def rasterize_pdf_first_page_to_png(pdf_bytes: bytes, *, max_dimension: int = 25
         longest_edge_pt = max(page.rect.width, page.rect.height)
         zoom = max_dimension / longest_edge_pt if longest_edge_pt > 0 else 1.0
         pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+        return pix.tobytes("png")
+
+
+def rasterize_pdf_tile_to_png(pdf_bytes: bytes, tile: "TileSpec", *, dpi: float) -> bytes:
+    """Renders one `TileSpec` region (see `dre.tiling.compute_tile_grid`) of
+    a PDF's first page to PNG at `dpi` — the per-tile counterpart to
+    `rasterize_pdf_first_page_to_png`, for docs/tiled_analysis_findings.md
+    §3b. `dpi` must be the same value the tile's grid was computed with;
+    this function doesn't re-derive or validate that, since `TileSpec`
+    itself doesn't carry the DPI it was generated at.
+
+    `tile.region` is normalized (0-1) against the *full sheet*, matching
+    the convention used everywhere else in the pipeline for detection
+    regions — converted here to the PDF's real point-space (page.rect) via
+    a `fitz.Rect` clip, so this is a direct crop-and-scale of the source,
+    not a crop-then-separately-rescale of an already-rendered full page.
+    """
+    import fitz  # PyMuPDF — imported lazily so it's only required when a PDF actually shows up
+
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+        page = doc[0]
+        page_rect = page.rect
+        clip = fitz.Rect(
+            tile.region.x * page_rect.width,
+            tile.region.y * page_rect.height,
+            (tile.region.x + tile.region.width) * page_rect.width,
+            (tile.region.y + tile.region.height) * page_rect.height,
+        )
+        zoom = dpi / 72
+        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip)
         return pix.tobytes("png")
 
 
