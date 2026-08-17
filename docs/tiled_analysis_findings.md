@@ -101,31 +101,73 @@ per axis.
 
 ## 3. Proposed design
 
-### 3a. Tile only when it's actually needed — revised, not fully solved
+### 3a. Tile only when it's actually needed — retry-driven, layered under a cheap pre-filter
 
 Original proposal: compute DPI from physical page size and the 2576px
 ceiling, tile below a threshold. **E-101.2 shows this trigger alone isn't
 sufficient** — it's the same page size and DPI as E-101.3, which didn't
 need tiling, so a size-only trigger would have skipped tiling for E-101.2
-too and been wrong. Page-size-DPI is still a legitimate first filter (it
-correctly would have skipped tiling for a small/sparse sheet), but a second
-signal for content density is needed alongside it.
+too and been wrong. Page-size-DPI stays as a cheap first-stage filter (it
+correctly rules out tiling for a small/sparse sheet before spending
+anything), but a second signal for content density is needed for the
+sheets it doesn't rule out.
 
-The real difficulty: density is naturally read off `detect`'s own output
-(detection count, table-extraction success, quoted-vs-vague geometry
-descriptions — exactly the signals that flagged E-101.2 in the first
-place) — but that means the *cheap, low-res, single-image* `detect` call
-has to run first before the system can decide whether tiling was needed,
-which is a chicken-and-egg problem for anything trying to decide "tile or
-not" before spending the tokens. Two directions worth considering, neither
-worked out yet: (a) always run the cheap single-image pass first, and
-re-run tiled only if that pass's own output looks thin (missing expected
-tables, detections with no quoted text, low self-reported image-quality
-notes) — a retry-driven trigger, not a pre-computed one; or (b) find a
-cheaper proxy for density that doesn't require a full detect call (e.g.
-vector-content complexity from the PDF itself — path/text-object count —
-for PDF uploads, though this doesn't help raster-only uploads). Needs more
-thought before this section can be called settled.
+**Chosen direction: retry-driven, not pre-computed.** Density is read off
+`detect`'s own real output — the exact signals that flagged E-101.2 in the
+first place — rather than guessed in advance from a proxy. This means the
+cheap single-image `detect` pass always runs first (as it does today); its
+output is then evaluated against a concrete, mechanical rule, and only
+escalates to tiling on a retry if the rule fires. Sparse sheets like
+E-101.3 pay nothing extra. Considered and deprioritized: a self-reported
+"can you read this" pre-check call, and a pure geometric/CV density proxy
+computed before any Claude call — see the trigger-options discussion this
+doc's history is built on (not reproduced here) for why evidence-based won
+out over prediction-based.
+
+**The concrete rule**, evaluated against `detect`/`detect_single`'s raw
+output (schema-safe across both modes — `flagged_by` only exists on
+`SingleSheetDetection`, not `RawDetection`, so the rule deliberately avoids
+depending on it, a real bug caught while validating this rule against
+E-101.2's actual two-image-mode trace):
+
+```
+distinct_extracted_table_titles = number of distinct `title` values
+                                   across extracted_tables
+quoted_fraction = (detections whose geometry_description contains a
+                    quoted substring) / (total detection count)
+
+IF detection_count < 3:
+    # Too few detections to trust quoted_fraction as a signal — a sparse-
+    # but-legitimate sheet could swing from 0/1 to 1/1 on a single data
+    # point. Fall back to the stronger, stricter all-tables-missing case.
+    TRIGGER = (distinct_extracted_table_titles == 0)
+ELSE:
+    TRIGGER = (distinct_extracted_table_titles <= 1) AND (quoted_fraction < 0.5)
+```
+
+The `<=1` threshold (not `==0`) in the main branch is deliberate: E-101.2
+*did* find one table — the issuance/revision list, the easiest one on any
+sheet like this (large print, fixed corner position, low information
+density) — while missing every substantive content table (notes, legend).
+Requiring strictly zero tables would have missed this real case.
+
+**Validated against real stored traces, not hypothetically**:
+
+| metric | E-101.3 (good, post-2576px-fix) | E-101.2 (degraded) |
+|---|---|---|
+| `detection_count` | 4 | 5 |
+| `distinct_extracted_table_titles` | 4 | 1 |
+| `quoted_fraction` | 0.5 (2/4) | 0.2 (1/5) |
+| rule branch | `>=3`, main | `>=3`, main |
+| `TRIGGER` | `4<=1` False → **off** | `1<=1` and `0.2<0.5` both True → **fires** |
+
+Correctly stays off for the sheet that didn't need tiling and fires for
+the one that did, using the exact stored numbers.
+
+**This is directionally validated, not fully validated — see §5.** Two
+data points is enough to catch a real schema bug (which it did) and
+confirm the signal's direction, not enough to trust the specific numeric
+thresholds against edge cases the sample doesn't cover.
 
 ### 3b. Grid with overlap, sized to the DPI target
 
@@ -165,6 +207,30 @@ elsewhere on the sheet" is a full-page question, not a per-tile one — while
 trusting the higher-resolution tile-derived `geometry_description`s for
 local detail. This needs validation once built, not assumed correct here.
 
+### 3e. Duration hint to Lovable — a real requirement, minimal scope for now
+
+A retry-driven trigger means a dense sheet's request gets meaningfully
+slower than today's baseline, synchronously, within the same request/
+response cycle Lovable calls today — the exact class of problem that
+already caused a real incident this session (the cold-start "Can't reach
+the server" investigation, where an unexpectedly-long/uncertain request
+duration was the root confusion). Shipping tiling without addressing this
+reintroduces that risk deliberately, not accidentally, so it belongs in
+scope now rather than as a follow-up once someone reports a "hang."
+
+Minimal version, ships alongside tiling: reuse 3a's cheap page-size
+pre-filter (already computed before any Claude call) to return an
+expected-duration hint to Lovable at submission time — before knowing
+whether the retry-driven trigger will actually fire, just from "this sheet
+is large enough that tiling is plausible." Cheap, no new architecture.
+
+**Explicitly out of scope for now, a separate later decision**: a real
+async/polling API contract (return immediately, let Lovable poll status)
+that would remove the timeout risk structurally instead of just warning
+about it. That's a real cross-team API contract change and needs its own
+decision, not something to fold into this design by default — tracked as
+its own item in §5.
+
 ## 4. Cost and latency impact
 
 Tiling multiplies `detect_single`'s call count by the tile grid size (9x
@@ -191,9 +257,24 @@ multiplier — worth pulling from `pipeline_steps` on a few more real runs.
   but there's no way to tell whether that was correct judgment or a missed
   detection that got lucky. This needs re-testing specifically, not
   inferring from other sheets passing.
-- How should the tiling trigger actually work, given page-size-only DPI
-  isn't sufficient (see revised §3a)? This is now the most load-bearing
-  open question in this document.
+- **The §3a trigger rule is directionally validated, not fully
+  validated — explicitly not settled.** Two data points (one good sheet,
+  one degraded sheet) confirmed the signal's direction and caught a real
+  bug (`flagged_by` doesn't exist on `RawDetection`, only on
+  `SingleSheetDetection` — the rule was redesigned to not depend on it).
+  That's not the same as validating the specific thresholds (`<=1` table
+  titles, `<0.5` quoted_fraction, `<3` detection-count floor) against edge
+  cases the sample doesn't cover — e.g. a sheet with 3-5 detections that's
+  genuinely sparse (nothing worth quoting) rather than illegible could
+  still trip the quoted_fraction condition as a false positive. Needs more
+  real sheets before the thresholds themselves are trustworthy, not just
+  the direction of the signal.
+- **Async/polling API contract — explicitly deferred, not decided
+  here.** §3e's duration-hint is the minimal version shipping with tiling;
+  a real fix that removes the timeout risk structurally (return
+  immediately, Lovable polls status) is real cross-team scope and needs
+  its own separate decision, not something to fold into this design by
+  default.
 - Is 150 DPI the right target, or should it be tuned against more real
   dense sheets first? E-101.3 is one data point.
 - Sequential vs. parallel tile calls — latency/cost/complexity tradeoff.
