@@ -90,6 +90,44 @@ cluster's detections split across multiple tiles into a single coherent
 finding (§3c) is now a confirmed real requirement for a usable end-to-end
 system, not a theoretical edge case anticipated in advance.
 
+**Fourth data point — the same test repeated against E-101.2, the sheet
+whose failure mode §2 established was different (density-driven, not a
+resolution problem the same way E-101.3's digit was).** Both of E-101.2's
+real known failures resolve at 150 DPI too:
+
+- The coded/general notes tables — never extracted at all across three
+  real production runs — extracted completely and correctly: 8 general
+  notes (A-H), 14 coded notes (1-14), including the exact text
+  independently confirmed against the source PDF: *"PROVIDE AFTER HOURS
+  RESTROOM OVERRIDE SWITCH - REFER TO LIGHTING CONTROL DETAIL ON SHEET
+  E201"* (coded note 5).
+- The fixture-zone revision markup — described only as *"cluster of
+  symbols near room E100/E124 area"* in every real production run —
+  resolves into specific, correct content: fixture types (*"R2, R2 EM,
+  R2 EM"*, *"R6"*), an *"EX1"* exit-sign symbol, and correctly-read *"B5"*
+  revision tags, read twice and matching the source. Getting there
+  required a real correction, not a clean first pass: the region **three
+  independent real production runs agreed on** turned out to be wrong by
+  roughly 10 physical inches — the tile rendered from it contained no
+  revision markup at all. Found the actual location by scanning the
+  full-page render for real red pixels, not by guessing again, and
+  verified it by viewing the cropped region directly before trusting it.
+
+**150 DPI is now validated against 2/2 real sheets tested, independently
+confirmed on each — E-101.3's digit and label text, E-101.2's coded note
+and fixture zone.** Still worth broadening as more real sheets run through
+the tuning harness over time (two sheets is not an exhaustive population),
+but this has moved past a starting point for tuning into real evidence —
+see §5.
+
+**The bounding-box finding above is not a side note — it's a direct
+constraint on §3c's design space, addressed explicitly there.** Three
+independent runs agreeing with each other did not make the region
+correct. Any merge/dedup approach that treats detect's self-reported
+tile-local coordinates as ground truth needs to account for this
+directly, not assume agreement across runs is a sufficient reliability
+check.
+
 ## 2. Root cause, with real numbers
 
 Confirmed against Anthropic's vision API docs (not assumed): `claude-sonnet-5`
@@ -171,12 +209,15 @@ directly whether the two known failures (the digit, the coded note)
 actually resolve, rather than continuing to reason forward from a formula
 whose own assumptions don't hold for this technology.
 
-**Interim default for building against, explicitly not a validated
-answer**: something in the **100-150 DPI** range — roughly double the ~51
-DPI that already worked for the one text category directly confirmed
-readable — as a reasonable starting point for tuning once a tiling
-mechanism exists to test against, not a number this document is asserting
-as correct. See §5 and the tuning-harness note in §3b.
+**Interim default for building against, at the time this was written not a
+validated answer**: something in the **100-150 DPI** range — roughly
+double the ~51 DPI that already worked for the one text category directly
+confirmed readable — as a reasonable starting point for tuning once a
+tiling mechanism exists to test against. **Update: the tuning harness now
+exists and this has been tested — 150 DPI is validated against 2/2 real
+sheets (§1, §5), not just an interim guess anymore.** Reasoning trail kept
+here as-is rather than rewritten, since it's how the number was actually
+reached, not because it's still the current state.
 
 **Revised after E-101.2: DPI-from-page-size is a necessary but not
 sufficient predictor.** E-101.2 and E-101.3 are the identical physical
@@ -312,20 +353,33 @@ cycle each time.
 Tiles need overlap — proposed 15-20% of tile size — so a revision cloud
 sitting on a tile boundary isn't split in half or missed by both tiles.
 
-### 3c. Per-tile detection, then merge
+### 3c. Per-tile detection, then merge — design constraint, not yet a chosen approach
 
 `detect_single` runs once per tile instead of once per sheet (this is
-where the cost multiplies — see §4). Each tile's `SingleSheetDetection.region`
-comes back normalized to *that tile's* image; it needs remapping to
-full-sheet-normalized coordinates using the tile's known offset/size within
-the full sheet (a straightforward linear transform, no model involvement
-needed). After remapping, detections from overlapping tile regions need
-deduplication — proposed as a geometric step (IOU-style overlap threshold
-on remapped regions, not another model call) rather than an LLM
-reconciliation pass, since it's a well-defined geometric problem and
-shouldn't need judgment. `extracted_tables` needs the same per-tile
-treatment: a schedule table dense enough to need tiling for legibility is
-exactly the kind of content this whole change exists to help with.
+where the cost multiplies — see §4). `extracted_tables` needs the same
+per-tile treatment: a schedule table dense enough to need tiling for
+legibility is exactly the kind of content this whole change exists to
+help with.
+
+**Hard constraint on the design space, confirmed by real evidence, not a
+theoretical caveat: detect's self-reported regions cannot be trusted as
+ground truth for merge/dedup, and agreement across independent runs does
+not establish trust either.** §1's E-101.2 test hit this directly — three
+separate real production runs independently agreed on a region for the
+fixture-zone revision cloud, and that region was wrong by roughly 10
+physical inches; the tile rendered from it contained no revision markup
+at all. The actual location was only found by scanning the rendered image
+for real red pixels and verifying the crop by eye, not by trusting the
+model's own coordinates, however consistently reported. The original
+proposal below — remap each tile-local `region` to full-sheet coordinates
+via linear transform, then geometrically deduplicate overlapping
+detections — was written before this was known, and a purely
+coordinate-based approach inherits this unreliability directly: if a
+detection's self-reported region is wrong, remapping it doesn't fix that,
+and a geometric merge step built on wrong coordinates can produce
+confident, wrong answers just as easily as no merge step at all. Three
+concrete directions, not a settled choice — see the discussion following
+this section.
 
 ### 3d. Reason/classify/confidence/describe stay mostly as-is
 
@@ -466,39 +520,30 @@ points.
   immediately, Lovable polls status) is real cross-team scope and needs
   its own separate decision, not something to fold into this design by
   default.
-- **The DPI target is explicitly open, not settled at any number — and
-  the theoretical path to one is now closed, not just untaken.** §2
-  attempted both paths this document originally proposed. Path (a), real
-  font-size extraction via PyMuPDF, is closed as inapplicable: both PDFs
-  are text-free (all characters flattened to vector outlines), confirmed
-  by direct inspection, not assumed. Geometric measurement from vector
-  paths did produce one real number — E-101.3's label text measures ~15pt,
-  not the assumed 6-8pt — but plugging it into the legibility formula
-  produces a target (96-120 DPI) built on a premise real behavior already
-  contradicts: that same 15pt text was read correctly by Claude at ~10.6px
-  effective character height, well under the formula's own 20-25px floor.
-  Revision-tag digits remain unmeasured, not just unresolved — one tag
-  region contained zero real content at `detect`'s own reported bounding
-  box, and where content existed the measured blob almost certainly fuses
-  the digit with the surrounding triangle symbol's outline. **Path (b),
-  empirical testing, is now the only remaining route to a real number**,
-  not one of two options — captured in §3b as a tuning-harness requirement
-  for the first build (parameterized `target_dpi`, not a buried constant),
-  with **100-150 DPI logged as an interim starting point for tuning, not a
-  validated answer**. Whichever number tuning eventually lands on directly
-  determines §3b's tile count and therefore §4's real cost.
-
-  **Update: real positive evidence at 150 DPI now exists, scoped exactly
-  as narrowly as it actually applies.** The tuning harness's first real
-  test (§1) confirmed both of E-101.3's original failures — the digit,
-  the communications-conduit label text — resolve at 150 DPI, independently
-  confirmed 3 times. This is evidence that 150 DPI resolves *E-101.3's*
-  failure mode, not a general validation of 150 DPI for tiling as a whole.
-  It says nothing about E-101.2's failure, which §2 already established is
-  driven by content density rather than the resolution mechanism this test
-  exercised — a genuinely different failure mode on a different sheet.
-  Don't read this as "150 DPI is the answer"; read it as one real, positive
-  data point for one real, specific case, with E-101.2 still untested.
+- **The DPI target: 150 DPI, validated against 2/2 real sheets tested —
+  not a guess, not an interim placeholder anymore.** §2 attempted both
+  paths this document originally proposed for reaching this number. Path
+  (a), real font-size extraction via PyMuPDF, closed as inapplicable: both
+  PDFs are text-free (all characters flattened to vector outlines),
+  confirmed by direct inspection, not assumed. Path (b), empirical
+  testing, is what actually delivered the answer: the tuning harness ran
+  the real `detect_single` stage against real tiles at 150 DPI on both
+  sheets tested so far, and it resolved every known failure independently
+  confirmed on each — E-101.3's revision-tag digit (misread as "1" at
+  every full-page resolution including the corrected 2576px ceiling, read
+  correctly as "4" three times across two tiles) and its
+  communications-conduit label text; E-101.2's coded/general notes tables
+  (never extracted at all across three real production runs, extracted
+  completely and correctly, including the exact text of coded note 5) and
+  its fixture-zone revision markup (vague in every production run, precise
+  and correct once tested against the actual — not the self-reported —
+  location; see §3c). Two sheets is real evidence, not an exhaustive
+  population — worth broadening as more real sheets run through the
+  harness over time, and still worth treating 150 DPI as revisable if a
+  future sheet's failure mode doesn't resolve at it — but this is no
+  longer a starting point being tuned toward an answer; it's the answer,
+  pending contrary evidence. This number directly determines §3b's tile
+  count and therefore §4's real cost.
 - Does `reason_single` genuinely do better with the full-page image for
   context, or would it also benefit from seeing the relevant tile(s)
   directly for a bundled detection group? Untested.
