@@ -40,6 +40,23 @@ landing right at the edge of legibility, with the model self-reporting
 marginal quality — that's the signature of a genuine resolution problem,
 not unrelated model variance.
 
+**Second real sheet, after the 2576px fix landed — E-101.2, a full floor
+lighting plan (dozens of fixtures) at the identical 50"x36" physical size as
+E-101.3.** The cheap resolution fix alone fully closed E-101.3's gaps (see
+`pipeline_notes.md`), so this was the test of whether it generalizes. It
+didn't: `detect` returned only vague, unquoted descriptions ("cluster of
+symbols," "circular symbol cluster" — no fixture types, no tag numbers) and
+extracted zero notes/fixture-schedule tables, despite independently
+confirming a specific coded note (an after-hours restroom override switch)
+is clearly legible on the source PDF. Three resulting `ChangeEvent`s all
+landed on an identical 40% confidence — traced through `synthesize_score`
+directly and confirmed as real deterministic math, not a fallback path, but
+the *inputs* converged because all three items were starved of the same
+missing schedule data, itself a symptom of the same extraction failure.
+This is the important new data point: **same physical page size, same
+2576px resolution, meaningfully worse outcome — driven by content density,
+not page size.** §2 and §3a below are revised accordingly.
+
 ## 2. Root cause, with real numbers
 
 Confirmed against Anthropic's vision API docs (not assumed): `claude-sonnet-5`
@@ -56,8 +73,19 @@ sixth of what fine print needs — not a marginal shortfall, a real gap. And
 this scales with sheet size: a 34"x22" ARCH D sheet lands around 76 DPI at
 the same ceiling; a letter/tabloid sheet is already fine (200-300+ DPI at
 2576px). Large-format sheets are the normal case for this application, not
-an edge case — E-501 and E-101.3, the two real sheets tested so far, are
-both large-format.
+an edge case — E-501, E-101.3, and E-101.2, the three real sheets tested so
+far, are all large-format.
+
+**Revised after E-101.2: DPI-from-page-size is a necessary but not
+sufficient predictor.** E-101.2 and E-101.3 are the identical physical
+size (50"x36") and therefore the identical ~51 DPI-equivalent, yet
+E-101.2's extraction was meaningfully worse — dozens of small densely-packed
+fixture symbols compete for the same pixel budget a sparser detail sheet
+doesn't need to share. A DPI number computed purely from page dimensions
+would have scored both sheets identically and predicted no problem for
+either, which is wrong for one of them. Content density — how much has to
+be resolved per unit area, not just how big the area is — is a second,
+independent factor. This matters directly for §3a below.
 
 One easy piece of this was already fixed: this pipeline's own PDF
 rasterization was capped at 2000px, *below* the real 2576px ceiling —
@@ -73,15 +101,31 @@ per axis.
 
 ## 3. Proposed design
 
-### 3a. Tile only when it's actually needed
+### 3a. Tile only when it's actually needed — revised, not fully solved
 
-Compute whether a sheet needs tiling before doing any of it: given the
-sheet's physical page size (available from the PDF page rect, or inferred
-from a standard sheet-size table for raster-only uploads) and the 2576px
-ceiling, estimate the DPI a single full-page image would get. Below a
-threshold (proposed: 150 DPI), tile; at or above it, run the existing
-single-image path unchanged. A letter-size sheet shouldn't pay a tiling
-cost multiplier it doesn't need.
+Original proposal: compute DPI from physical page size and the 2576px
+ceiling, tile below a threshold. **E-101.2 shows this trigger alone isn't
+sufficient** — it's the same page size and DPI as E-101.3, which didn't
+need tiling, so a size-only trigger would have skipped tiling for E-101.2
+too and been wrong. Page-size-DPI is still a legitimate first filter (it
+correctly would have skipped tiling for a small/sparse sheet), but a second
+signal for content density is needed alongside it.
+
+The real difficulty: density is naturally read off `detect`'s own output
+(detection count, table-extraction success, quoted-vs-vague geometry
+descriptions — exactly the signals that flagged E-101.2 in the first
+place) — but that means the *cheap, low-res, single-image* `detect` call
+has to run first before the system can decide whether tiling was needed,
+which is a chicken-and-egg problem for anything trying to decide "tile or
+not" before spending the tokens. Two directions worth considering, neither
+worked out yet: (a) always run the cheap single-image pass first, and
+re-run tiled only if that pass's own output looks thin (missing expected
+tables, detections with no quoted text, low self-reported image-quality
+notes) — a retry-driven trigger, not a pre-computed one; or (b) find a
+cheaper proxy for density that doesn't require a full detect call (e.g.
+vector-content complexity from the PDF itself — path/text-object count —
+for PDF uploads, though this doesn't help raster-only uploads). Needs more
+thought before this section can be called settled.
 
 ### 3b. Grid with overlap, sized to the DPI target
 
@@ -137,6 +181,19 @@ multiplier — worth pulling from `pipeline_steps` on a few more real runs.
 
 ## 5. Open questions before building this
 
+- **Action item, not just a question**: once tiling (or another resolution
+  fix) ships, re-run E-101.2 specifically and check whether `detect`
+  correctly reasons about the known "cloud tagged '36' removed on the newer
+  revision" trap — i.e. recognizes it as old markup being cleaned up, not a
+  real change — once it can actually see the sheet clearly. Right now
+  `detect` never even surfaced the old cloud as a detection at all (zero
+  `present_in: "old_only"` results), so the trap technically didn't fire,
+  but there's no way to tell whether that was correct judgment or a missed
+  detection that got lucky. This needs re-testing specifically, not
+  inferring from other sheets passing.
+- How should the tiling trigger actually work, given page-size-only DPI
+  isn't sufficient (see revised §3a)? This is now the most load-bearing
+  open question in this document.
 - Is 150 DPI the right target, or should it be tuned against more real
   dense sheets first? E-101.3 is one data point.
 - Sequential vs. parallel tile calls — latency/cost/complexity tradeoff.
