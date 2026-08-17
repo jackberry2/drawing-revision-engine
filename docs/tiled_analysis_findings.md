@@ -353,7 +353,7 @@ cycle each time.
 Tiles need overlap — proposed 15-20% of tile size — so a revision cloud
 sitting on a tile boundary isn't split in half or missed by both tiles.
 
-### 3c. Per-tile detection, then merge — design constraint, not yet a chosen approach
+### 3c. Per-tile detection, then merge — chosen and built (v1, real known limits)
 
 `detect_single` runs once per tile instead of once per sheet (this is
 where the cost multiplies — see §4). `extracted_tables` needs the same
@@ -377,9 +377,63 @@ detections — was written before this was known, and a purely
 coordinate-based approach inherits this unreliability directly: if a
 detection's self-reported region is wrong, remapping it doesn't fix that,
 and a geometric merge step built on wrong coordinates can produce
-confident, wrong answers just as easily as no merge step at all. Three
-concrete directions, not a settled choice — see the discussion following
-this section.
+confident, wrong answers just as easily as no merge step at all.
+
+**Chosen and built: tile-adjacency-scoped candidates + content-based
+confirmation.** Three directions were sketched (pure geometric IOU;
+content-based dedup; this hybrid) with real tradeoffs weighed before
+picking — chosen specifically because the failure case that sank pure
+content-matching alone (two distinct real revision clouds sharing a
+generic "B5" tag, in different rooms with different fixture types — a
+real case in E-101.2's data, not hypothetical) is exactly what
+tile-adjacency scoping was free to guard against, using only
+`compute_tile_grid`'s own known-correct grid structure — never a
+detection's self-reported region — to decide which detections are even
+worth comparing.
+
+Implementation (`dre.pipeline.tile_merge`): `find_merge_candidates`
+restricts comparison to detection pairs from the same-or-adjacent tile
+(the only spatial fact trusted); `likely_same_element` then requires at
+least 2 shared distinctive content tokens (extracted from each
+detection's own description text — label-style codes like `R2`/`E124`
+weighted as a strong signal, bare quoted short numbers like `'4'` treated
+as weak, since bulletin/tag numbers are systematically reused across
+unrelated real elements by design, unlike equipment/room codes) —
+`group_merge_candidates` turns the resulting pairs into final clusters via
+union-find. A single shared tag is deliberately not sufficient on its
+own — validated directly against the real E-101.2 case: `_QUOTED_SHORT_TOKEN_RE`
+and `_LABEL_CODE_RE` correctly keep the two real "B5" clouds in separate
+groups in `tests/test_tile_merge.py`, using their actual detection text,
+not synthetic examples.
+
+**Two honest limitations, found by testing the design's own assumptions
+against real data, not asserted away:**
+- The same real E-101.3 cluster that motivated logging the overlap-margin
+  risk in §5 — confirmed the same physical revision cloud by directly
+  viewing both tiles — does *not* get merged by this design. The only
+  content the two tiles' detections share is the generic "4" bulletin-tag
+  number, which `MIN_SHARED_TOKENS=2` is specifically built not to trust
+  alone (for good reason — see above). A real, tested gap, not a
+  theoretical one.
+- The same threshold also means a revision cloud and its own tag,
+  captured in different tiles, often won't merge either — tags are
+  typically terse (e.g. *"Red triangular tag containing text 'B5'
+  pointing at the bottom edge..."*) and don't repeat the cloud's other
+  distinguishing details, so they frequently share only the one tag
+  token with their own cloud — the same weak signal the design correctly
+  distrusts in the cross-element case. Caught by testing an assumption
+  that turned out wrong (a "cloud obviously matches its own tag" sanity
+  check), not assumed correct going in.
+
+Both failures land in the safer direction deliberately favored throughout
+this design: under-merging leaves both fragments individually reported,
+rather than an over-merge silently conflating two distinct real elements
+into one. Not a finished solution — a real v1 with real, tested,
+documented edges, consistent with how every other number in this document
+has been treated. No genuine positive full-pipeline merge has been
+confirmed against real data yet (today's real cross-tile cases were both
+negative/miss cases) — worth specifically looking for as more real sheets
+run through the tuning harness.
 
 ### 3d. Reason/classify/confidence/describe stay mostly as-is
 
@@ -550,17 +604,19 @@ points.
 - How should tile size interact with different real sheet sizes (ARCH D
   vs ARCH E vs letter) — a fixed grid size, or computed per-sheet as
   proposed in §3b?
-- **Geometric dedup/merge (§3c) is now the next real blocker for a usable
-  end-to-end system — confirmed necessary, not just anticipated.** §1's
-  real tiled test hit exactly the edge case this bullet used to describe
-  hypothetically: the actual revision-cloud cluster spans a 4-tile corner,
-  no single tile covers more than 67.9% of it, and the two best-coverage
-  tiles' real detections split the cluster's information between them —
-  one mentions the label text, the other doesn't. The resolution problem
-  (§2) is solved; without merge logic to recombine a cluster's detections
-  across tiles into one coherent finding, a real tiled pipeline would
-  still misrepresent this exact case, just via fragmentation instead of
-  illegibility. This is the next piece to design, not a follow-up spike.
+- **Merge/dedup (§3c) is built (v1), not still an open blocker — but its
+  own real limits are now open items.** Built as tile-adjacency-scoped
+  candidates + content-based confirmation, specifically because a pure
+  geometric approach was directly undermined by the bounding-box finding.
+  Validated against the real E-101.2 false-positive risk (two distinct
+  "B5"-tagged clouds correctly kept separate). Not validated against a
+  genuine positive case yet — both real cross-tile cases tested so far
+  (E-101.3's cluster split, a cloud vs. its own tag) are known misses
+  under the current `MIN_SHARED_TOKENS=2` threshold, landing safely
+  (under- not over-merging) but real gaps. Worth specifically hunting for
+  a genuine positive real case as more sheets run through the harness,
+  and worth revisiting the threshold once one exists to test against —
+  right now there's no real positive example to tune it with.
 - **Residual overlap-margin risk, found while verifying real rendered
   tiles by eye (not from the coverage-math tests, which can't catch this):
   a single note wider than the overlap margin could in principle be split
