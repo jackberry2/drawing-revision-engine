@@ -57,6 +57,39 @@ This is the important new data point: **same physical page size, same
 2576px resolution, meaningfully worse outcome — driven by content density,
 not page size.** §2 and §3a below are revised accordingly.
 
+**Third data point — the first real tiled test, against the actual failure
+that started this document, not a synthetic check.** Using the tuning
+harness (`dre tile-detect`, §3b), ran the real `detect_single` stage
+against real E-101.3 tiles at 150 DPI, targeting the exact revision-cloud
+cluster from the original evidence above. Both original failures resolved:
+
+- The revision tag digit — misread as "1" at every full-page resolution
+  tested, including the corrected 2576px ceiling — read correctly as
+  **"4"** three independent times across two tiles: *"Red triangular
+  revision tag containing number '4'"*; *"a red numbered triangle tag
+  '4' near the top of the cloud"*; *"Red triangular tag containing the
+  number '4'"*.
+- The communications-conduit label text, previously `identity_unresolved`,
+  now reads correctly and completely: *"leader lines pointing to text
+  labels 'NORTH COMMUNICATIONS CONDUIT SERVICE ENTRANCE' and 'SOUTH
+  COMMUNICATIONS CONDUIT SERVICE ENTRANCE'"*.
+
+This is real, not a legibility check on a rendered image — the actual
+production `DetectSingleStep` produced this output, the same stage a real
+tiled analysis would run. Scoped precisely: this is evidence for 150 DPI
+resolving *E-101.3's specific failures*, not a general validation of 150
+DPI for tiling overall — see §5.
+
+**The same test also surfaced a real, not hypothetical, instance of the
+overlap-margin risk logged in §5.** The actual revision-cloud cluster
+spans a corner where four tiles meet; the best single tile covered only
+67.9% of it. This showed up directly in the results — one tile's
+detections never mention the communications-conduit text at all, only the
+other tile's do. The resolution problem is solved; reassembling one
+cluster's detections split across multiple tiles into a single coherent
+finding (§3c) is now a confirmed real requirement for a usable end-to-end
+system, not a theoretical edge case anticipated in advance.
+
 ## 2. Root cause, with real numbers
 
 Confirmed against Anthropic's vision API docs (not assumed): `claude-sonnet-5`
@@ -454,16 +487,35 @@ points.
   with **100-150 DPI logged as an interim starting point for tuning, not a
   validated answer**. Whichever number tuning eventually lands on directly
   determines §3b's tile count and therefore §4's real cost.
+
+  **Update: real positive evidence at 150 DPI now exists, scoped exactly
+  as narrowly as it actually applies.** The tuning harness's first real
+  test (§1) confirmed both of E-101.3's original failures — the digit,
+  the communications-conduit label text — resolve at 150 DPI, independently
+  confirmed 3 times. This is evidence that 150 DPI resolves *E-101.3's*
+  failure mode, not a general validation of 150 DPI for tiling as a whole.
+  It says nothing about E-101.2's failure, which §2 already established is
+  driven by content density rather than the resolution mechanism this test
+  exercised — a genuinely different failure mode on a different sheet.
+  Don't read this as "150 DPI is the answer"; read it as one real, positive
+  data point for one real, specific case, with E-101.2 still untested.
 - Does `reason_single` genuinely do better with the full-page image for
   context, or would it also benefit from seeing the relevant tile(s)
   directly for a bundled detection group? Untested.
 - How should tile size interact with different real sheet sizes (ARCH D
   vs ARCH E vs letter) — a fixed grid size, or computed per-sheet as
   proposed in §3b?
-- Geometric dedup (§3c) will have real edge cases (a cloud that's mostly
-  in one tile's overlap zone but not fully inside either tile's core
-  region) — worth a small spike against real overlapping-boundary cases
-  before committing to the approach.
+- **Geometric dedup/merge (§3c) is now the next real blocker for a usable
+  end-to-end system — confirmed necessary, not just anticipated.** §1's
+  real tiled test hit exactly the edge case this bullet used to describe
+  hypothetically: the actual revision-cloud cluster spans a 4-tile corner,
+  no single tile covers more than 67.9% of it, and the two best-coverage
+  tiles' real detections split the cluster's information between them —
+  one mentions the label text, the other doesn't. The resolution problem
+  (§2) is solved; without merge logic to recombine a cluster's detections
+  across tiles into one coherent finding, a real tiled pipeline would
+  still misrepresent this exact case, just via fragmentation instead of
+  illegibility. This is the next piece to design, not a follow-up spike.
 - **Residual overlap-margin risk, found while verifying real rendered
   tiles by eye (not from the coverage-math tests, which can't catch this):
   a single note wider than the overlap margin could in principle be split
@@ -477,7 +529,11 @@ points.
   the physical overlap margin, could plausibly still split content with
   neither tile whole. Worth a real check against a sheet with wider note
   text before treating 15% as sufficient in general, not just for this
-  case.
+  case. (Distinct from the dedup/merge finding above: this is about
+  whether a margin is wide enough to fully *contain* an element at all;
+  the dedup finding is about *recombining* an element that legitimately
+  spans multiple tiles even when each tile's portion is intact. Both are
+  real, both point at §3c, but they're different failure mechanisms.)
 
 ## Appendix: raw evidence
 
