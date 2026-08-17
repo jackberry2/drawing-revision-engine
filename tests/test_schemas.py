@@ -52,6 +52,7 @@ def test_final_alert_carries_confidence_breakdown():
         cross_sheet_corroboration_factor=0.8,
         cross_sheet_corroboration_note="Panel schedule confirms new panel position note.",
         ambiguity_factor=0.75,
+        ambiguity_factor_raw=0.75,
         ambiguity_note="Clearly redrawn in a new grid location.",
         rationale="High confidence from a sharp scan and schedule corroboration.",
     )

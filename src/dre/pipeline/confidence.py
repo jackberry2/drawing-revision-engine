@@ -135,6 +135,7 @@ def _to_confidence_score(
         cross_sheet_corroboration_factor=cross_sheet_corroboration_factor,
         cross_sheet_corroboration_note=factors.cross_sheet_corroboration_note,
         ambiguity_factor=ambiguity_factor,
+        ambiguity_factor_raw=factors.ambiguity_factor,
         ambiguity_note=factors.ambiguity_note,
         rationale=factors.rationale,
     )

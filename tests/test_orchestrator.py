@@ -97,6 +97,7 @@ class FakeConfidence(PipelineStep):
                 cross_sheet_corroboration_factor=0.5,
                 cross_sheet_corroboration_note="n/a",
                 ambiguity_factor=0.8,
+                ambiguity_factor_raw=0.8,
                 ambiguity_note="n/a",
                 rationale="n/a",
             )

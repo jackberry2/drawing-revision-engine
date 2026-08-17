@@ -1,7 +1,8 @@
 import pytest
 
 from dre.mapping import to_confidence_tier
-from dre.pipeline.confidence import synthesize_score
+from dre.models.schemas import ConfidenceFactors
+from dre.pipeline.confidence import _to_confidence_score, synthesize_score
 
 # Real factor breakdowns logged from live runs of the E-201 "new wall forces
 # C3 reroute" case (see pipeline_change_events for these run_ids). Confidence
@@ -71,3 +72,47 @@ def test_score_is_always_in_valid_range():
                     image_quality_factor=iq, cross_sheet_corroboration_factor=corr, ambiguity_factor=amb
                 )
                 assert 0.0 <= score <= 1.0
+
+
+def _factors(*, ambiguity_factor: float) -> ConfidenceFactors:
+    return ConfidenceFactors(
+        change_event_id="ce_1",
+        image_quality_factor=0.55,
+        image_quality_note="n/a",
+        cross_sheet_corroboration_factor=0.5,
+        cross_sheet_corroboration_note="n/a",
+        ambiguity_factor=ambiguity_factor,
+        ambiguity_note="n/a",
+        rationale="n/a",
+    )
+
+
+def test_ambiguity_factor_raw_preserves_models_pre_cap_value():
+    """The real E-101.2 case this exists for: three identity_unresolved
+    items all scored an identical 40%, and there was no way to tell whether
+    the model had genuinely converged on the same ambiguity judgment three
+    times or whether the identity_unresolved cap had overwritten three
+    different raw values down to the same capped one. ambiguity_factor_raw
+    must carry the model's real, uncapped number through even when the
+    capped ambiguity_factor used for scoring is forced down."""
+    factors = _factors(ambiguity_factor=0.9)
+    result = _to_confidence_score(factors, mode="two_image", identity_unresolved=True)
+
+    assert result.ambiguity_factor == 0.3  # capped, used for scoring
+    assert result.ambiguity_factor_raw == 0.9  # the model's real, uncapped judgment
+
+
+def test_ambiguity_factor_raw_matches_capped_value_when_no_cap_applies():
+    factors = _factors(ambiguity_factor=0.6)
+    result = _to_confidence_score(factors, mode="two_image", identity_unresolved=False)
+
+    assert result.ambiguity_factor == 0.6
+    assert result.ambiguity_factor_raw == 0.6
+
+
+def test_ambiguity_factor_raw_preserved_under_single_sheet_ceiling_too():
+    factors = _factors(ambiguity_factor=0.95)
+    result = _to_confidence_score(factors, mode="single_sheet", identity_unresolved=False)
+
+    assert result.ambiguity_factor == 0.85  # single-sheet ceiling
+    assert result.ambiguity_factor_raw == 0.95

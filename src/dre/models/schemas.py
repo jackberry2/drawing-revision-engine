@@ -203,7 +203,31 @@ class ConfidenceScore(BaseModel):
     image_quality_note: str
     cross_sheet_corroboration_factor: float = Field(..., ge=0.0, le=1.0)
     cross_sheet_corroboration_note: str
-    ambiguity_factor: float = Field(..., ge=0.0, le=1.0)
+    ambiguity_factor: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "The value actually used in scoring, after apply_mode_ceiling's "
+            "clamps (single_sheet ceiling, identity_unresolved cap). See "
+            "ambiguity_factor_raw for what the model itself assessed."
+        ),
+    )
+    ambiguity_factor_raw: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "The model's own ambiguity_factor before any code-level cap is "
+            "applied — kept for debugging only, never used in scoring. A "
+            "real case (E-101.2) needed this: three identity_unresolved "
+            "items all scored an identical 40%, and without this field "
+            "there was no way to tell whether the model had genuinely "
+            "converged on the same judgment three times or whether the "
+            "identity_unresolved cap had simply overwritten three "
+            "different raw values down to the same capped one."
+        ),
+    )
     ambiguity_note: str
     rationale: str = Field(..., description="Human-readable summary of the three factor assessments.")
 
