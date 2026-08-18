@@ -883,17 +883,27 @@ points.
     backstop on top of the source fix, not instead of it — real LLM
     output varies run to run, and this exact sheet organically hit 54
     once already before any of these fixes existed. All three layers
-    (cloud-proximity filter, source prompt fix, volume cap) are built and
-    unit-tested; **one more clean live run confirming all three work
-    together in production is the next real check.**
+    (cloud-proximity filter, source prompt fix, volume cap) are built,
+    unit-tested, **and confirmed together against a real live run**: a
+    final `/analyze-single` call against the real E-101.2 request took the
+    tiled path end to end (trigger fired on the low_n branch, 20
+    detections post-filter — cap not needed, `applied: false` — classify
+    through `describe` all succeeded) and wrote 8 real `flagged_changes`
+    rows, including the two real B5-tagged clouds coming out as two
+    separate, correctly distinct findings — the exact known-good
+    separation case this design was validated against throughout this
+    document, now produced by the real production path, not a manual
+    test script. One already-known limitation was still present in that
+    run, not a new one: the coded/general-notes table still didn't
+    survive the naive title-based table dedup — see the `extracted_tables`
+    gap below, unchanged by this round's fixes.
 
   **So: the orchestration gap is closed for single_sheet mode, and the
-  volume/mislabeling failure it exposed has a three-layer fix — but
-  "closed" so far means real attempts that failed, were root-caused
-  precisely, and got fixed at the right layer each time, not a smooth
-  first pass.** Once a live run confirms the full chain (trigger → grid →
-  filter → source-fixed detect → cap → classify) end to end, two known
-  gaps remain before this is production-ready at scale: (1) it's
+  volume/mislabeling failure it exposed has a three-layer fix, now
+  confirmed working together end to end in production** — real attempts
+  that failed, were root-caused precisely, got fixed at the right layer
+  each time, and were then proven to work together for real, not assumed.
+  Two known gaps remain before this is production-ready at scale: (1) it's
   sequential, so a triggering request is measurably slower than before,
   with nothing yet telling Lovable to expect that, and (2) a schedule
   table that genuinely differs across tiles will be silently
