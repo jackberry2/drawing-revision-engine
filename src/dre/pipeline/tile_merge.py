@@ -11,6 +11,14 @@ purely geometric IOU merge inherits that unreliability directly. Content
 matching sidesteps it: only the deterministic tile grid (never a
 detection's own coordinate claim) decides which pairs are even worth
 comparing, and only shared description content decides whether to merge.
+
+Also holds `filter_detections_by_cloud_proximity` — a related but distinct
+concern from merge/dedup above: not "are these two detections the same
+real element" but "is this detection plausible revision markup at all."
+Colocated here because it reuses the same tile-adjacency primitive
+(`tiles_are_adjacent`), not because it's part of the merge/dedup job. See
+docs/tiled_analysis_findings.md §5's full-grid noise finding for why this
+exists.
 """
 
 from __future__ import annotations
@@ -74,6 +82,67 @@ def tiles_are_adjacent(row_a: int, col_a: int, row_b: int, col_b: int) -> bool:
     relationship this module trusts, since it comes from the tile grid
     itself, never from a detection's self-reported region."""
     return abs(row_a - row_b) <= 1 and abs(col_a - col_b) <= 1
+
+
+# flagged_by values exempt from the cloud-proximity check below - passed
+# through unconditionally, never discarded by it. `revision_cloud` is the
+# trust anchor itself (see filter_detections_by_cloud_proximity). Per
+# detect_single.md's own definition, `annotation_note` is explicitly "no
+# cloud/tag" by design - a standalone handwritten note - so requiring
+# cloud-adjacency would systematically discard a whole legitimate category,
+# not filter noise. `unmarked` is left here deliberately unfiltered too -
+# an open question, not a decided position (already self-hedged by the
+# model's own "be conservative" instruction, and too low-volume in the one
+# real run examined so far to have real evidence either way) - see
+# docs/tiled_analysis_findings.md §5.
+_CLOUD_PROXIMITY_EXEMPT_FLAGGED_BY = frozenset({"revision_cloud", "annotation_note", "unmarked"})
+
+
+def filter_detections_by_cloud_proximity(detections: list[TiledDetection]) -> list[TiledDetection]:
+    """Plausibility filter for docs/tiled_analysis_findings.md §5's
+    full-grid noise finding: real production data (E-101.2, full 9-tile
+    grid) showed 73/79 raw per-tile detections were `revision_tag` items
+    describing hexagonal tags - a shape that directly contradicts detect_
+    single.md's own definition of that category ("a numbered triangle/
+    delta symbol"). Cropped to an isolated tile with no full-sheet context,
+    detect_single over-applies `revision_tag` to ordinary keyed-note
+    hexagon tags, a completely different, unrelated drafting convention.
+    Same failure shape as the bounding-box unreliability finding above and
+    the reason.md prose bugs from earlier in this project - the model
+    confidently asserting a specific claim (here, "this is a revision tag")
+    that turns out wrong, not a volume/scale problem to solve by
+    processing more of it.
+
+    Keeps every `revision_cloud` detection unconditionally (the
+    hardest-to-fake signal - an actual drawn cloud outline) and every
+    exempt-category detection (see `_CLOUD_PROXIMITY_EXEMPT_FLAGGED_BY`).
+    Everything else (in practice: `revision_tag`) is kept only if it's in
+    the same or an adjacent tile to at least one real `revision_cloud`
+    detection - grounded in real precedent, not an invented assumption:
+    every validated real tag in this project's data (E-101.2's and
+    E-101.3's) sits same-tile or adjacent-tile to its own cloud, confirmed
+    via `tiles_are_adjacent` against the real fixtures in
+    tests/test_tile_merge.py before this filter was built.
+
+    Honest limitation, same safer-direction bias as the rest of this
+    design: if detect_single misses the cloud in its own tile (a real,
+    already-documented resolution risk) but correctly finds the tag, this
+    discards a real tag along with the noise. Under-inclusion over false
+    confidence, consistent with every other tradeoff in this document."""
+    cloud_tiles = {
+        (td.tile_row, td.tile_col) for td in detections if td.detection.flagged_by == "revision_cloud"
+    }
+    kept = []
+    for td in detections:
+        if td.detection.flagged_by in _CLOUD_PROXIMITY_EXEMPT_FLAGGED_BY:
+            kept.append(td)
+            continue
+        if any(
+            tiles_are_adjacent(td.tile_row, td.tile_col, cloud_row, cloud_col)
+            for cloud_row, cloud_col in cloud_tiles
+        ):
+            kept.append(td)
+    return kept
 
 
 def likely_same_element(a: SingleSheetDetection, b: SingleSheetDetection) -> bool:

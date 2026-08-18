@@ -25,6 +25,7 @@ from dre.pipeline.tile_merge import (
     TiledDetection,
     compute_merge_diagnostics,
     extract_content_tokens,
+    filter_detections_by_cloud_proximity,
     find_merge_candidates,
     group_merge_candidates,
     likely_same_element,
@@ -268,3 +269,136 @@ def test_compute_merge_diagnostics_on_the_real_e101_3_calibration_case():
 
     assert diagnostics.total_detections == 3
     assert diagnostics.multi_member_groups == 0
+
+
+# --- filter_detections_by_cloud_proximity (docs/tiled_analysis_findings.md
+# §5's full-grid noise finding: a real E-101.2 production run produced 79
+# detections, 92% of them `revision_tag` items describing hexagonal
+# keyed-note tags - a shape detect_single.md itself defines as triangular
+# for that category - which broke classify on the resulting volume.) ---
+
+_HEXAGONAL_KEYED_NOTE_TAG_FAR_FROM_ANY_CLOUD = SingleSheetDetection(
+    id="noise1",
+    flagged_by="revision_tag",
+    geometry_description=(
+        "Hexagonal tag containing the number '3' pointing at a light fixture "
+        "symbol at the end of the middle fixture row"
+    ),
+)
+
+_STANDALONE_ANNOTATION_NOTE = SingleSheetDetection(
+    id="note1",
+    flagged_by="annotation_note",
+    geometry_description="Handwritten note 'CONFIRM WITH EC' near a device symbol, no cloud or tag.",
+)
+
+_LOW_CONFIDENCE_UNMARKED = SingleSheetDetection(
+    id="unmarked1",
+    flagged_by="unmarked",
+    geometry_description=(
+        "Isolated hexagon-outline number '6' with no visible pointer; included "
+        "cautiously since it resembles other revision tags."
+    ),
+)
+
+
+def test_filter_keeps_real_e101_2_tags_that_sit_with_their_own_cloud():
+    """The real precedent the filter is grounded in: both E-101.2 tags sit
+    in the same tile as their own cloud (see this file's module docstring
+    on why - both really captured in one tile, split across tile
+    coordinates here only for cross-tile testing elsewhere in this file)."""
+    detections = [
+        TiledDetection(tile_row=1, tile_col=1, detection=_E101_2_CLOUD_1),
+        TiledDetection(tile_row=1, tile_col=1, detection=_E101_2_TAG_1),
+        TiledDetection(tile_row=1, tile_col=2, detection=_E101_2_CLOUD_2),
+        TiledDetection(tile_row=1, tile_col=2, detection=_E101_2_TAG_2),
+    ]
+    kept = filter_detections_by_cloud_proximity(detections)
+    assert {td.detection.id for td in kept} == {"cloud1", "tag1", "cloud2", "tag2"}
+
+
+def test_filter_keeps_real_e101_3_tag_genuinely_split_across_a_tile_boundary():
+    """The genuine cross-tile-boundary precedent: tag_r1c1 (tile 1,1) and
+    cloud_r1c0 (tile 1,0) were captured in two actually-different real
+    tiles during the harness run, confirmed by directly viewing both."""
+    detections = [
+        TiledDetection(tile_row=1, tile_col=1, detection=_E101_3_TAG_R1C1),
+        TiledDetection(tile_row=1, tile_col=0, detection=_E101_3_CLOUD_R1C0),
+    ]
+    kept = filter_detections_by_cloud_proximity(detections)
+    assert {td.detection.id for td in kept} == {"tag_r1c1", "cloud_r1c0"}
+
+
+def test_filter_discards_a_tag_with_no_cloud_anywhere_nearby():
+    """The real production case this filter exists for: a hexagonal
+    keyed-note tag several tiles away from the nearest (or any) real
+    revision cloud - exactly the shape of 73/79 detections in the real
+    E-101.2 full-grid run."""
+    detections = [
+        TiledDetection(tile_row=0, tile_col=0, detection=_E101_2_CLOUD_1),
+        TiledDetection(
+            tile_row=5, tile_col=5, detection=_HEXAGONAL_KEYED_NOTE_TAG_FAR_FROM_ANY_CLOUD
+        ),
+    ]
+    kept = filter_detections_by_cloud_proximity(detections)
+    assert {td.detection.id for td in kept} == {"cloud1"}
+
+
+def test_filter_discards_a_tag_with_no_cloud_in_the_detection_set_at_all():
+    detections = [
+        TiledDetection(
+            tile_row=0, tile_col=0, detection=_HEXAGONAL_KEYED_NOTE_TAG_FAR_FROM_ANY_CLOUD
+        ),
+    ]
+    assert filter_detections_by_cloud_proximity(detections) == []
+
+
+def test_filter_never_discards_annotation_note_even_with_no_nearby_cloud():
+    """detect_single.md defines annotation_note as explicitly having no
+    cloud/tag - filtering it on cloud-adjacency would kill a whole
+    legitimate category, not remove noise."""
+    detections = [
+        TiledDetection(tile_row=9, tile_col=9, detection=_STANDALONE_ANNOTATION_NOTE),
+    ]
+    assert filter_detections_by_cloud_proximity(detections) == detections
+
+
+def test_filter_never_discards_unmarked_left_as_an_open_question():
+    """Deliberately left unfiltered for now - not decided settled policy,
+    see docs/tiled_analysis_findings.md §5."""
+    detections = [
+        TiledDetection(tile_row=9, tile_col=9, detection=_LOW_CONFIDENCE_UNMARKED),
+    ]
+    assert filter_detections_by_cloud_proximity(detections) == detections
+
+
+def test_filter_on_the_real_e101_2_full_grid_production_data_matches_the_confirmed_finding():
+    """Reproduces the actual real-world case that motivated this filter:
+    92% of a real 79-detection full-grid run were hexagonal revision_tag
+    items nowhere near any real revision_cloud. A minimal reconstruction
+    (3 real clouds, a mix of near/far hexagonal tags) - not the full 79,
+    but the same real shape of the problem."""
+    detections = [
+        TiledDetection(tile_row=1, tile_col=1, detection=_E101_2_CLOUD_1),
+        TiledDetection(tile_row=1, tile_col=2, detection=_E101_2_CLOUD_2),
+        # Near cloud1 - kept.
+        TiledDetection(
+            tile_row=1,
+            tile_col=1,
+            detection=SingleSheetDetection(
+                id="near_cloud1",
+                flagged_by="revision_tag",
+                geometry_description="Hexagonal tag containing the number '9' near the cloud.",
+            ),
+        ),
+        # Far from every cloud - discarded.
+        TiledDetection(
+            tile_row=4,
+            tile_col=4,
+            detection=_HEXAGONAL_KEYED_NOTE_TAG_FAR_FROM_ANY_CLOUD,
+        ),
+    ]
+    kept = filter_detections_by_cloud_proximity(detections)
+    kept_ids = {td.detection.id for td in kept}
+    assert kept_ids == {"cloud1", "cloud2", "near_cloud1"}
+    assert "noise1" not in kept_ids

@@ -446,6 +446,110 @@ more real evaluated pairs (matched and unmatched) to tune the threshold
 against later. As of this writing it's only reachable via the harness, not
 production traffic — see §5 for why, and what production wiring would take.
 
+### 3g. Full-grid noise: a plausibility pre-filter before merge — found during real production wiring, not anticipated in design
+
+The first real full-grid production run (E-101.2, wired into `service.py`
+per the "now actually wired in" note in §5) surfaced a problem no prior
+testing had exercised: tiling an *entire* sheet, not just the specific
+region known to contain revision markup, produced **79 raw detections** —
+far beyond anything a single-pass run or the earlier hand-picked-tile
+harness tests ever saw. Fed into `classify` unfiltered, Claude returned an
+empty tool-use payload three times in a row and the request failed
+outright (not a token-truncation — the code checks `stop_reason ==
+"max_tokens"` specifically and would have raised a different, more
+specific error).
+
+**Root cause, confirmed against the real data, not assumed:** of the 79
+detections, 73 (92%) were `flagged_by: "revision_tag"`, and nearly every
+one described a *hexagonal* tag (e.g. *"Hexagonal tag containing the
+number '3'..."*). `detect_single.md`'s own definition of `revision_tag` is
+explicit: *"a numbered triangle/delta symbol pointing at it, with no
+cloud."* A hexagon is not a triangle. Every real revision tag validated
+elsewhere in this document (E-101.2's and E-101.3's actual "B5"/"4" tags)
+is a **red triangle** — hexagonal numbered tags are an unrelated, standard
+drafting convention (keyed-note references to a coded/general note
+elsewhere on the sheet) with no connection to revisions at all. Cropped to
+an isolated tile with no full-sheet context, `detect_single` applies
+`revision_tag` to shapes that contradict its own prompt's definition.
+
+**This is the same failure shape as two other findings already in this
+document, not a one-off:** the bounding-box unreliability finding above
+(§3c — three independent runs confidently agreeing on a region that was
+~10 physical inches wrong) and the `reason.md`/`enforce_identity_
+unresolved` prose bugs from earlier in this project (a specific wrong
+claim — "moved," a wrong noun for an unidentified element — stated
+confidently rather than hedged). All three are the model asserting a
+specific, plausible-sounding, *wrong* claim rather than an appropriately
+uncertain one. Each has needed its own fix at its own layer (identity
+resolution enforced code-side for the prose case, content-matching
+instead of trusting coordinates for the bounding-box case) — this is the
+same pattern surfacing at the detect-per-tile layer.
+
+Worth noting: `detect_single.md`'s own last line already anticipates a
+downstream filter — *"a spurious one can still be filtered out
+downstream"* — so a pre-classify plausibility filter is honoring the
+system's existing designed contract, not a workaround bolted on after the
+fact. "Downstream" had only ever meant `classify`'s trade-materiality
+judgment until tiling generated volume at a scale that assumption was
+never built for.
+
+**Three approaches were sketched before building anything** (same pattern
+as §3a/§3c):
+
+- **(A) Tile-adjacency to a real `revision_cloud`** — keep every
+  `revision_cloud` unconditionally (the hardest-to-fake signal), keep a
+  `revision_tag` only if it's same-tile-or-adjacent (reusing the already-
+  tested, coordinate-only `tiles_are_adjacent` — no new threshold) to at
+  least one real cloud, discard the rest.
+- **(B) Shape-vocabulary sanity check** — discard a `revision_tag` whose
+  own description names a shape ("hexagon"/"hexagonal") contradicting the
+  prompt's "triangle/delta" definition.
+- **(C) A + B combined.**
+
+**Chosen: A.** B most directly explains the confirmed failure, but it's a
+free-text keyword heuristic with no guarantee it generalizes to other real
+mislabeling patterns, and does nothing for `unmarked`/`annotation_note` —
+the same hardcoded-specific-pattern risk this project has been burned by
+before (DPI, the prose bugs above), just at the filter layer instead of
+the reasoning layer. A trusts structure already independently validated as
+real, not wording that happened to show up once. C stacks two heuristics
+against a single real data point — the same over-tuning-off-one-sheet risk
+avoided everywhere else in this document (DPI, `MIN_SHARED_TOKENS`).
+
+**"Every real tag sits adjacent to its own cloud" was checked against both
+real sheets before being treated as a real pattern, not assumed:**
+E-101.2's tag/cloud pairs (`tiles_are_adjacent(1,1,1,1)`,
+`tiles_are_adjacent(1,2,1,2)`) confirm the same-tile case — though honestly,
+that pair was genuinely captured within one real tile and only split
+across tile coordinates in `tests/test_tile_merge.py` for testing purposes,
+so it doesn't test a true cross-tile-boundary case. E-101.3's pairing does:
+`tag_r1c1` (tile 1,1) and `cloud_r1c0` (tile 1,0) were captured in two
+actually-different real tiles during the harness run (confirmed by
+directly viewing both), and `tiles_are_adjacent(1,1,1,0)` is `True`. One
+real same-tile confirmation plus one real genuine-cross-tile confirmation
+— real supporting evidence, not an invented assumption, though still just
+two data points.
+
+**Built** (`dre.pipeline.tile_merge.filter_detections_by_cloud_proximity`,
+applied inside `merge_tiled_detections` before grouping): keeps every
+`revision_cloud`, every `annotation_note` (defined in the prompt as
+explicitly having *no* cloud/tag — filtering it on cloud-adjacency would
+kill a whole legitimate category, not remove noise), and every `unmarked`
+detection (left deliberately open — already self-hedged by the model's own
+"be conservative" instruction, and too low-volume in the one real run
+examined so far — 2 of 79 — to have real evidence either way). Filters
+`revision_tag` by cloud-adjacency only. Tested against the real E-101.2/
+E-101.3 fixtures (confirms real tags survive) and a reconstruction of the
+real noise case (confirms a far-from-any-cloud hexagonal tag is discarded)
+— see `tests/test_tile_merge.py`.
+
+**Not yet re-validated against a real live run.** The fix is built and
+unit-tested against real fixture data, but the actual E-101.2 request that
+originally failed hasn't been re-run through the live endpoint yet to
+confirm classify now succeeds end-to-end on the filtered volume — that's
+the next real check, not an assumption this section should be read as
+having already confirmed.
+
 ### 3d. Reason/classify/confidence/describe stay mostly as-is
 
 Everything downstream of `detect_single` already treats detections as a
@@ -704,15 +808,28 @@ points.
     repeated table title, doesn't attempt to reconcile rows that differ
     per tile). A schedule table whose real content actually differs by
     tile has no correct handling yet.
+  - **Found and fixed during the first real attempt, not anticipated in
+    design (§3g):** the first real full-grid production run (E-101.2)
+    actually failed — 79 raw detections from tiling the whole sheet, 92%
+    of them a real detect_single mislabeling (hexagonal keyed-note tags
+    called `revision_tag`, a category its own prompt defines as
+    triangular), broke `classify` outright. Root-caused against the real
+    data and fixed with a plausibility pre-filter
+    (`filter_detections_by_cloud_proximity`), built and unit-tested — but
+    **not yet re-confirmed against a real live run**. The first real
+    end-to-end attempt at the tiled path is still an open loop, not a
+    confirmed success, until that re-run happens.
 
-  **So: the orchestration gap is closed for single_sheet mode; two real
-  gaps remain before this is production-ready at scale.** Tiling now
-  actually happens on real triggering single-sheet requests, not just in
-  the harness — but (1) it's sequential, so a triggering request is
-  measurably slower than before, with nothing yet telling Lovable to
-  expect that, and (2) a schedule table that genuinely differs across
-  tiles will be silently under-reported. Both are scoped, known next
-  steps, not open questions.
+  **So: the orchestration gap is closed for single_sheet mode, but "closed"
+  so far means one real attempt that failed, was root-caused, and got a
+  targeted fix — not yet one that has actually succeeded end-to-end.**
+  Once a real run confirms classify succeeds on the filtered volume, two
+  known gaps remain before this is production-ready at scale: (1) it's
+  sequential, so a triggering request is measurably slower than before,
+  with nothing yet telling Lovable to expect that, and (2) a schedule
+  table that genuinely differs across tiles will be silently
+  under-reported. Both are scoped, known next steps, not open questions —
+  but confirming a real tiled run can complete successfully comes first.
 
 ## Appendix: raw evidence
 

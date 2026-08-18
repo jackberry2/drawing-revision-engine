@@ -23,7 +23,11 @@ from typing import Optional
 from dre.imaging import is_pdf
 from dre.models.schemas import ExtractedTable, SingleSheetDetectResult, SingleSheetDetection
 from dre.pipeline.base import PipelineContext
-from dre.pipeline.tile_merge import TiledDetection, group_merge_candidates
+from dre.pipeline.tile_merge import (
+    TiledDetection,
+    filter_detections_by_cloud_proximity,
+    group_merge_candidates,
+)
 from dre.pipeline.tile_tuning import run_detect_single_on_grid
 from dre.tiling_trigger import compute_tiling_trigger_diagnostics
 
@@ -118,7 +122,17 @@ def merge_tiled_detections(
     would make `classify`'s `raw_detection_id` references genuinely
     ambiguous — a real traceability bug, not just a cosmetic one — so
     every detection in the merged output gets a fresh, guaranteed-unique
-    id instead."""
+    id instead.
+
+    First applies `filter_detections_by_cloud_proximity` (docs/tiled_
+    analysis_findings.md §5) — a real full-grid production run against
+    E-101.2 produced 79 raw detections, 92% of them `revision_tag` items
+    describing hexagonal keyed-note tags misapplied with a category
+    detect_single.md itself defines as triangular, which broke classify
+    3 times in a row on the resulting volume. Filtering implausible
+    per-tile detections before merge/grouping, not after, keeps the
+    volume classify actually receives bounded from the start."""
+    tiled_detections = filter_detections_by_cloud_proximity(tiled_detections)
     groups = group_merge_candidates(tiled_detections)
     merged_detections = [_merge_group(g, next_id=i) for i, g in enumerate(groups, start=1)]
     merged_tables = _dedup_tables(extracted_tables, next_id_start=1)
