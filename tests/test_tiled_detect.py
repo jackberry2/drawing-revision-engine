@@ -18,6 +18,9 @@ from dre.models.schemas import ExtractedTable, SingleSheetDetectResult, SingleSh
 from dre.pipeline.base import PipelineContext
 from dre.pipeline.tile_merge import TiledDetection
 from dre.pipeline.tiled_detect import (
+    CLASSIFY_DETECTION_CAP,
+    VolumeCapDiagnostics,
+    _cap_detection_volume,
     decide_and_apply_tiling,
     merge_tiled_detections,
     sheet_dimensions_in_inches,
@@ -145,9 +148,10 @@ def test_merge_keeps_real_e101_2_clouds_separate_and_reassigns_ids():
         TiledDetection(tile_row=1, tile_col=1, detection=_E101_2_CLOUD_1),
         TiledDetection(tile_row=1, tile_col=2, detection=_E101_2_CLOUD_2),
     ]
-    result = merge_tiled_detections(tiled, [])
+    result, cap_diagnostics = merge_tiled_detections(tiled, [])
 
     assert len(result.detections) == 2  # stayed separate, matching test_tile_merge.py's finding
+    assert cap_diagnostics.applied is False  # well under the cap
     # The real bug this guards against: both source detections shared the
     # id "cloud1" (independent per-tile Claude calls can genuinely produce
     # colliding ids) - the merged output must not carry that collision
@@ -171,7 +175,7 @@ def test_merge_combines_a_multi_member_group_into_one_detection():
         TiledDetection(tile_row=0, tile_col=0, detection=cloud),
         TiledDetection(tile_row=0, tile_col=1, detection=tag),
     ]
-    result = merge_tiled_detections(tiled, [])
+    result, _ = merge_tiled_detections(tiled, [])
 
     assert len(result.detections) == 1
     merged = result.detections[0]
@@ -187,9 +191,65 @@ def test_merge_dedups_tables_by_title_across_tiles():
         ExtractedTable(id="b", table_type="other", sheet_version="new", title="GENERAL NOTES"),
         ExtractedTable(id="c", table_type="other", sheet_version="new", title="CODED NOTES"),
     ]
-    result = merge_tiled_detections([], tables)
+    result, _ = merge_tiled_detections([], tables)
 
     assert sorted(t.title for t in result.extracted_tables) == ["CODED NOTES", "GENERAL NOTES"]
+
+
+# ---- _cap_detection_volume: defensive backstop for the confirmed real
+# classify breaking point (docs/tiled_analysis_findings.md §5/§3g: a real
+# 54-detection set succeeded through n=50 and failed at n=54). ----------
+
+
+def _fake_detection(i: int, flagged_by: str) -> SingleSheetDetection:
+    return SingleSheetDetection(id=f"d{i}", flagged_by=flagged_by, geometry_description=f"item {i}")
+
+
+def test_cap_is_a_no_op_under_the_limit():
+    detections = [_fake_detection(i, "revision_tag") for i in range(10)]
+    kept, diagnostics = _cap_detection_volume(detections, cap=40)
+
+    assert kept == detections
+    assert diagnostics == VolumeCapDiagnostics(
+        pre_cap_count=10, post_cap_count=10, cap=40, applied=False
+    )
+
+
+def test_cap_drops_excess_and_reports_it():
+    detections = [_fake_detection(i, "revision_tag") for i in range(50)]
+    kept, diagnostics = _cap_detection_volume(detections, cap=40)
+
+    assert len(kept) == 40
+    assert diagnostics == VolumeCapDiagnostics(
+        pre_cap_count=50, post_cap_count=40, cap=40, applied=True
+    )
+
+
+def test_cap_keeps_highest_trust_categories_first():
+    """revision_cloud (hardest to fake) must survive over revision_tag
+    (the real noise category, §3g) when the cap has to choose."""
+    detections = (
+        [_fake_detection(i, "revision_tag") for i in range(38)]
+        + [_fake_detection(100 + i, "revision_cloud") for i in range(5)]
+    )
+    kept, diagnostics = _cap_detection_volume(detections, cap=40)
+
+    assert diagnostics.applied is True
+    kept_ids = {d.id for d in kept}
+    # All 5 clouds must survive - only the lowest-trust tags get dropped.
+    assert {"d100", "d101", "d102", "d103", "d104"} <= kept_ids
+    assert len(kept) == 40
+
+
+def test_cap_preserves_original_relative_order_of_survivors():
+    detections = [_fake_detection(i, "revision_tag") for i in range(45)]
+    kept, _ = _cap_detection_volume(detections, cap=40)
+
+    assert [d.id for d in kept] == [f"d{i}" for i in range(40)]
+
+
+def test_default_cap_constant_matches_the_documented_safe_margin():
+    assert CLASSIFY_DETECTION_CAP == 40
 
 
 # ---- decide_and_apply_tiling ---------------------------------------------
@@ -250,15 +310,18 @@ def test_replaces_detect_single_result_when_rule_fires_against_a_pdf():
         ],
         extracted_tables=[],
     )
+    cap_diagnostics = VolumeCapDiagnostics(pre_cap_count=1, post_cap_count=1, cap=40, applied=False)
 
     with patch(
-        "dre.pipeline.tiled_detect.run_tiled_detect_and_merge", return_value=tiled_result
+        "dre.pipeline.tiled_detect.run_tiled_detect_and_merge",
+        return_value=(tiled_result, cap_diagnostics),
     ) as mock_run:
         outcome = decide_and_apply_tiling(ctx, raw_pdf_bytes=b"%PDF-1.4 fake pdf bytes", dpi=150.0)
 
     mock_run.assert_called_once_with(b"%PDF-1.4 fake pdf bytes", dpi=150.0)
     assert outcome.path == "tiled"
     assert ctx.detect_single_result is tiled_result
+    assert outcome.volume_cap_diagnostics == cap_diagnostics.model_dump(mode="json")
 
 
 def test_falls_back_to_single_pass_when_tiling_raises():

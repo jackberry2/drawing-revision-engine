@@ -543,12 +543,68 @@ E-101.3 fixtures (confirms real tags survive) and a reconstruction of the
 real noise case (confirms a far-from-any-cloud hexagonal tag is discarded)
 — see `tests/test_tile_merge.py`.
 
-**Not yet re-validated against a real live run.** The fix is built and
-unit-tested against real fixture data, but the actual E-101.2 request that
-originally failed hasn't been re-run through the live endpoint yet to
-confirm classify now succeeds end-to-end on the filtered volume — that's
-the next real check, not an assumption this section should be read as
-having already confirmed.
+**Re-validated against a real live run — filter A alone was insufficient.**
+Re-running the real E-101.2 request live only re-fired the trigger by
+chance (it's stochastic on the initial single-pass call's own real
+output — an earlier attempt legitimately took the untiled path on a run
+that didn't trip the rule at all, a real, expected instance of this
+project's established run-to-run LLM variance, not a bug). To get a
+deterministic real test, a throwaway local script called `run_tiled_
+detect_and_merge` directly against the real E-101.2 PDF, forcing the
+tiled path regardless of the trigger. Result: filter A cut volume 79 → 54
+(mostly via `revision_tag`: 73 → 45), but **classify failed identically**
+— same empty-payload error, three times in a row. Root cause: this sheet
+has *several* real revision clouds spread across many different tiles,
+not the one-or-two-cloud-per-region pattern the earlier validated cases
+(E-101.2's two B5 clouds, E-101.3's fiber cloud) happened to have. Cloud
+adjacency to *any* cloud barely discriminates once a sheet is busy enough
+that most tiles sit near *some* cloud — filter A's premise (tags sit near
+their own cloud) wasn't wrong, but "near any cloud" is a much weaker
+constraint than "near their own cloud" on a busy sheet. A's real,
+independent limitation — not wrong, just insufficient alone here.
+
+**Fixed at the source instead of adding a second filter layer.** Since the
+hexagon/triangle mislabeling had now reproduced identically across two
+independent real runs (79 detections, then a fresh 54 — not the same data
+re-examined, a completely new set of real API calls finding the same
+pattern), it had crossed from "one observation, risky to hardcode" to "a
+confirmed, stable pattern" — worth fixing where it actually originates.
+Added an explicit negative example to `detect_single.md`: a hexagon (or
+any non-triangular shape) is a keyed-note reference, not a revision tag,
+regardless of how confidently numbered it looks — resolve the shape
+ambiguity a cropped tile creates by shape alone, not by assuming. Result,
+a fresh real tiled run against the same PDF: **79 → 15 total detections**
+(`revision_tag` specifically: 73 → 4). Classify succeeded cleanly — 15
+classified changes, no retries. The source fix alone got a fresh real run
+comfortably under any plausible breaking point.
+
+**The real classify breaking point, found independently of filter
+quality.** Reusing the real (log-truncated to 120 chars) 54-detection set
+from the failed run, sliced into fixed sizes and run directly against
+`classify`: succeeded at n=15, 25, 35, and 50; failed at n=54, with the
+identical empty-payload error. A narrow, specific, now-known ceiling —
+consistent with `call_structured`'s `max_tokens=8192` budget against how
+verbose a fully-elaborated `ClassifiedChange` object is (`materiality_
+reason`, `trade_description`, etc.) — not an estimate or a guess.
+
+**A defensive volume cap was added on top of both fixes, not instead of
+them** (`tiled_detect.CLASSIFY_DETECTION_CAP = 40`,
+`_cap_detection_volume`) — the source fix is the primary defense and
+dramatically effective in the run tested, but that's one real run against
+one sheet, and this exact sheet organically produced 54 detections once
+already before the fix existed. If the filtered/merged detection count
+exceeds 40 (real margin below the confirmed 50/54 boundary), the lowest-
+signal excess is dropped rather than sent to classify — ranked by the
+same trust hierarchy `filter_detections_by_cloud_proximity` already uses
+(`revision_cloud` kept first, `unmarked` dropped first), not a new
+heuristic invented for this. Chosen over chunking classify into multiple
+calls specifically because chunking doesn't actually cap anything (cost
+still scales with raw volume, just spread across more calls) and adds
+cross-batch merge complexity for what's meant to be a simple backstop.
+Every application of the cap is logged as part of the `tile_merge`
+pipeline_steps entry (`VolumeCapDiagnostics`: pre/post count, whether it
+fired) — see `dre.service`. Unit-tested (`tests/test_tiled_detect.py`)
+including that the highest-trust categories always survive a cap.
 
 ### 3d. Reason/classify/confidence/describe stay mostly as-is
 
@@ -808,28 +864,40 @@ points.
     repeated table title, doesn't attempt to reconcile rows that differ
     per tile). A schedule table whose real content actually differs by
     tile has no correct handling yet.
-  - **Found and fixed during the first real attempt, not anticipated in
-    design (§3g):** the first real full-grid production run (E-101.2)
-    actually failed — 79 raw detections from tiling the whole sheet, 92%
-    of them a real detect_single mislabeling (hexagonal keyed-note tags
-    called `revision_tag`, a category its own prompt defines as
-    triangular), broke `classify` outright. Root-caused against the real
-    data and fixed with a plausibility pre-filter
-    (`filter_detections_by_cloud_proximity`), built and unit-tested — but
-    **not yet re-confirmed against a real live run**. The first real
-    end-to-end attempt at the tiled path is still an open loop, not a
-    confirmed success, until that re-run happens.
+  - **Found, root-caused, and fixed with three layers during real
+    production wiring, not anticipated in design (§3g):** the first real
+    full-grid run (E-101.2) failed — 79 raw detections, 92% a real
+    `detect_single` mislabeling (hexagonal keyed-note tags called
+    `revision_tag`, a category its own prompt defines as triangular),
+    broke `classify` outright. A first fix (`filter_detections_by_cloud_
+    proximity`, cloud-adjacency) cut volume to 54 but classify **still
+    failed identically** on a real re-test — a real, honest miss, not a
+    silent success: this sheet has several real clouds spread across many
+    tiles, so "adjacent to *any* cloud" barely discriminates. The actual
+    fix was at the source: an explicit hexagon-vs-triangle correction in
+    `detect_single.md` took a fresh real run to 79 → 15 detections, and
+    classify succeeded cleanly. A real breaking point was also found
+    independent of filter quality (succeeds through n=50, fails at
+    n=54 — narrow and specific, not estimated), and a volume cap
+    (`CLASSIFY_DETECTION_CAP = 40`) was added as a permanent defensive
+    backstop on top of the source fix, not instead of it — real LLM
+    output varies run to run, and this exact sheet organically hit 54
+    once already before any of these fixes existed. All three layers
+    (cloud-proximity filter, source prompt fix, volume cap) are built and
+    unit-tested; **one more clean live run confirming all three work
+    together in production is the next real check.**
 
-  **So: the orchestration gap is closed for single_sheet mode, but "closed"
-  so far means one real attempt that failed, was root-caused, and got a
-  targeted fix — not yet one that has actually succeeded end-to-end.**
-  Once a real run confirms classify succeeds on the filtered volume, two
-  known gaps remain before this is production-ready at scale: (1) it's
+  **So: the orchestration gap is closed for single_sheet mode, and the
+  volume/mislabeling failure it exposed has a three-layer fix — but
+  "closed" so far means real attempts that failed, were root-caused
+  precisely, and got fixed at the right layer each time, not a smooth
+  first pass.** Once a live run confirms the full chain (trigger → grid →
+  filter → source-fixed detect → cap → classify) end to end, two known
+  gaps remain before this is production-ready at scale: (1) it's
   sequential, so a triggering request is measurably slower than before,
   with nothing yet telling Lovable to expect that, and (2) a schedule
   table that genuinely differs across tiles will be silently
-  under-reported. Both are scoped, known next steps, not open questions —
-  but confirming a real tiled run can complete successfully comes first.
+  under-reported. Both are scoped, known next steps, not open questions.
 
 ## Appendix: raw evidence
 

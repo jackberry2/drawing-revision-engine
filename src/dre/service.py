@@ -132,7 +132,10 @@ def analyze_request(analysis_request_id: str, *, dry_run: bool = False) -> dict[
                         run_id=pipeline_ctx.run_id,
                         step_name="tile_merge",
                         step_order=1,
-                        input_data={"trigger_diagnostics": outcome.trigger_diagnostics},
+                        input_data={
+                            "trigger_diagnostics": outcome.trigger_diagnostics,
+                            "volume_cap_diagnostics": outcome.volume_cap_diagnostics,
+                        },
                         output_data=pipeline_ctx.detect_single_result,
                         model_used=None,
                         prompt_version="v1",

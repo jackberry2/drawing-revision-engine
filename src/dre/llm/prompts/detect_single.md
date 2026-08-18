@@ -17,13 +17,24 @@ Do two things:
    markup indicating a change, emit a `SingleSheetDetection`:
    - `flagged_by`: exactly how the drafter marked it —
      `"revision_cloud"` (a hand-drawn cloud outline around it),
-     `"revision_tag"` (a numbered triangle/delta symbol pointing at it, with
-     no cloud), `"annotation_note"` (a handwritten note like "RELOCATED PER
-     RFI #14" or "CONFIRM WITH EC" with no cloud/tag), or `"unmarked"` — only
-     use this if something looks like it might be a change despite having
-     *no* markup at all; be conservative here, since you have no real way to
-     confirm it without a prior image, and say so plainly in
+     `"revision_tag"` (a numbered **triangle/delta** symbol pointing at it,
+     with no cloud), `"annotation_note"` (a handwritten note like "RELOCATED
+     PER RFI #14" or "CONFIRM WITH EC" with no cloud/tag), or `"unmarked"` —
+     only use this if something looks like it might be a change despite
+     having *no* markup at all; be conservative here, since you have no real
+     way to confirm it without a prior image, and say so plainly in
      `geometry_description`.
+     A **hexagon** (or circle, or any shape that isn't a triangle/delta) is
+     not a revision tag, no matter how similar it looks at a glance or how
+     confidently numbered it is — it is almost always a keyed-note reference
+     pointing at a coded/general note elsewhere on the sheet, a completely
+     different, unrelated drafting convention that has nothing to do with
+     revisions. Do not emit a `revision_tag` detection for a hexagonal (or
+     any non-triangular) numbered symbol. This distinction matters most
+     precisely when you're shown a *cropped region* of a larger sheet with
+     little surrounding context to judge by — do not resolve that
+     uncertainty by assuming a numbered symbol is probably a revision tag;
+     resolve it by shape alone.
    - `region`: normalized (0-1) bounding box of the element itself (not the
      cloud/tag decoration around it, if distinguishable).
    - `geometry_description`: terse, purely visual — what the element looks
