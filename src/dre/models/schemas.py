@@ -230,6 +230,21 @@ class ConfidenceScore(BaseModel):
     )
     ambiguity_note: str
     rationale: str = Field(..., description="Human-readable summary of the three factor assessments.")
+    cross_event_causal_risk_flagged: bool = Field(
+        default=False,
+        description=(
+            "True when this event asserts a specific external cause (a causally-"
+            "risky category) while this same run also has a separate, unresolved, "
+            "unlinked item that could plausibly be the real cause instead — the "
+            "real E-201 shape (see docs/pipeline_notes.md). Not a claim this "
+            "event's stated cause is wrong, only that this run's shape is the one "
+            "where that's already happened once for real; drives a real "
+            "ambiguity_factor ceiling (see confidence.py's apply_mode_ceiling) and "
+            "a code-authored caveat in downstream_implications. Logged here as "
+            "passive calibration data for the ceiling value, same pattern as "
+            "ambiguity_factor_raw."
+        ),
+    )
 
 
 # ---- Stage 5: describe -----------------------------------------------------

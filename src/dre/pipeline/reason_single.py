@@ -5,7 +5,7 @@ from dre.llm.client import call_structured, dump_models, encode_image, load_prom
 from dre.models.schemas import ChangeEvent, ClassifiedChange, ReasonResponse
 from dre.pipeline.base import PipelineContext, PipelineStep
 from dre.pipeline.classify import SINGLE_SHEET_NOTE
-from dre.pipeline.identity_resolution import enforce_identity_unresolved
+from dre.pipeline.identity_resolution import enforce_identity_unresolved, flag_cross_event_causal_risk
 
 
 class ReasonSingleStep(PipelineStep):
@@ -56,5 +56,6 @@ class ReasonSingleStep(PipelineStep):
             model=self.model_used,
         )
         change_events = enforce_identity_unresolved(result.change_events, material)
+        change_events = flag_cross_event_causal_risk(change_events)
         ctx.change_events = change_events
         return change_events

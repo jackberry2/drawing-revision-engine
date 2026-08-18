@@ -4,7 +4,7 @@ from dre import config
 from dre.llm.client import call_structured, dump_models, encode_image, load_prompt
 from dre.models.schemas import ChangeEvent, ReasonResponse
 from dre.pipeline.base import PipelineContext, PipelineStep
-from dre.pipeline.identity_resolution import enforce_identity_unresolved
+from dre.pipeline.identity_resolution import enforce_identity_unresolved, flag_cross_event_causal_risk
 
 
 class ReasonStep(PipelineStep):
@@ -52,5 +52,6 @@ class ReasonStep(PipelineStep):
             model=self.model_used,
         )
         change_events = enforce_identity_unresolved(result.change_events, material)
+        change_events = flag_cross_event_causal_risk(change_events)
         ctx.change_events = change_events
         return change_events

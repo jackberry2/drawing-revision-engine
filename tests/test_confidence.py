@@ -1,8 +1,11 @@
+from unittest.mock import patch
+
 import pytest
 
 from dre.mapping import to_confidence_tier
-from dre.models.schemas import ConfidenceFactors
-from dre.pipeline.confidence import _to_confidence_score, synthesize_score
+from dre.models.schemas import ChangeCategory, ChangeEvent, ConfidenceFactors
+from dre.pipeline.base import PipelineContext
+from dre.pipeline.confidence import ConfidenceStep, _to_confidence_score, synthesize_score
 
 # Real factor breakdowns logged from live runs of the E-201 "new wall forces
 # C3 reroute" case (see pipeline_change_events for these run_ids). Confidence
@@ -116,3 +119,110 @@ def test_ambiguity_factor_raw_preserved_under_single_sheet_ceiling_too():
 
     assert result.ambiguity_factor == 0.85  # single-sheet ceiling
     assert result.ambiguity_factor_raw == 0.95
+
+
+# ---- cross_event_causal_risk ceiling (docs/pipeline_notes.md, "reason can
+# fabricate a confident causal claim while the real cause sits orphaned
+# nearby, unlinked" - the real E-201 case) --------------------------------
+
+
+def test_cross_event_causal_risk_caps_ambiguity_below_the_textbook_clear_band():
+    """E-201's real bad evt1 scored 0.8525 - squarely in the textbook-clear
+    band - specifically because its ambiguity_factor was reported very
+    high (0.9). The cap must keep that from happening again for a flagged
+    event, regardless of how clean the rest of its evidence looks."""
+    factors = _factors(ambiguity_factor=0.9)
+    result = _to_confidence_score(
+        factors, mode="two_image", identity_unresolved=False, cross_event_causal_risk=True
+    )
+
+    assert result.ambiguity_factor == 0.75  # capped
+    assert result.ambiguity_factor_raw == 0.9  # model's real judgment preserved
+    assert result.cross_event_causal_risk_flagged is True
+    from dre.mapping import to_confidence_tier
+
+    assert to_confidence_tier(result.score) != "high"
+
+
+def test_cross_event_causal_risk_does_not_lower_an_already_low_ambiguity():
+    factors = _factors(ambiguity_factor=0.4)
+    result = _to_confidence_score(
+        factors, mode="two_image", identity_unresolved=False, cross_event_causal_risk=True
+    )
+
+    assert result.ambiguity_factor == 0.4  # min() with 0.75 - unaffected
+
+
+def test_identity_unresolved_cap_takes_precedence_over_cross_event_risk():
+    """An event can't be both identity_unresolved and cross_event_causal_risk
+    in practice (has_cross_event_causal_risk excludes unresolved events),
+    but if both flags were ever passed together, the stricter, more
+    certain identity_unresolved cap must win."""
+    factors = _factors(ambiguity_factor=0.9)
+    result = _to_confidence_score(
+        factors, mode="two_image", identity_unresolved=True, cross_event_causal_risk=True
+    )
+
+    assert result.ambiguity_factor == 0.3  # identity_unresolved cap, not 0.75
+
+
+def test_cross_event_causal_risk_flag_defaults_to_false_and_is_a_no_op():
+    factors = _factors(ambiguity_factor=0.9)
+    result = _to_confidence_score(factors, mode="two_image", identity_unresolved=False)
+
+    assert result.cross_event_causal_risk_flagged is False
+    assert result.ambiguity_factor == 0.9  # unaffected
+
+
+def test_confidence_step_wires_cross_event_causal_risk_from_ctx_change_events(tmp_path):
+    """Integration-level check on the actual wiring in ConfidenceStep.execute
+    (not just the pure functions it calls) - the real E-201 shape: a
+    panel_relocation event alongside a separate identity_unresolved event
+    in the same ctx.change_events."""
+    old = tmp_path / "old.png"
+    new = tmp_path / "new.png"
+    png_magic = b"\x89PNG\r\n\x1a\n"
+    old.write_bytes(png_magic)
+    new.write_bytes(png_magic)
+
+    flagged_event = ChangeEvent(
+        id="evt1",
+        root_cause_change_id="c1",
+        bundled_change_ids=["c1", "c4"],
+        category=ChangeCategory.CIRCUIT_REROUTE,
+        root_cause_summary="Panel relocated, forcing a reroute.",
+        identity_unresolved=False,
+    )
+    unresolved_event = ChangeEvent(
+        id="evt2",
+        root_cause_change_id="c5",
+        bundled_change_ids=["c5"],
+        category=ChangeCategory.OTHER,
+        root_cause_summary="An item on this sheet is flagged but unconfirmed.",
+        identity_unresolved=True,
+    )
+    ctx = PipelineContext(run_id="run_test", old_image_path=old, new_image_path=new)
+    ctx.change_events = [flagged_event, unresolved_event]
+
+    def fake_call_structured(*, system, user_content, response_model, model):
+        change_event_id = ctx.change_events[len(scored_so_far)].id
+        scored_so_far.append(change_event_id)
+        return ConfidenceFactors(
+            change_event_id=change_event_id,
+            image_quality_factor=0.95,
+            image_quality_note="n/a",
+            cross_sheet_corroboration_factor=0.7,
+            cross_sheet_corroboration_note="n/a",
+            ambiguity_factor=0.9,
+            ambiguity_note="n/a",
+            rationale="n/a",
+        )
+
+    scored_so_far: list[str] = []
+    with patch("dre.pipeline.confidence.call_structured", side_effect=fake_call_structured):
+        scores = ConfidenceStep().execute(ctx)
+
+    by_id = {s.change_event_id: s for s in scores}
+    assert by_id["evt1"].cross_event_causal_risk_flagged is True
+    assert by_id["evt1"].ambiguity_factor == 0.75  # capped
+    assert by_id["evt2"].cross_event_causal_risk_flagged is False  # the unresolved event itself

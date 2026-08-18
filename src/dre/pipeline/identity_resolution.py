@@ -4,6 +4,22 @@ rather than trusting the model to apply them consistently — same principle
 as the confidence-synthesis fix. `ClassifiedChange.identity_unresolved` is
 set by the shared `classify` stage for both modes, so this needs to be
 enforced for both, not just single-sheet mode.
+
+Also holds `flag_cross_event_causal_risk` — a related but distinct
+consequence of `identity_unresolved`, not about the unresolved event
+itself but about *other* events in the same run. See
+docs/pipeline_notes.md, "`reason` can fabricate a confident causal claim
+while the real cause sits orphaned nearby, unlinked" for the real
+production case this exists for (E-201: a circuit reroute got confidently
+attributed to a panel relocation while the actual likely cause — a new
+wall — sat in its own, unlinked `identity_unresolved` event in the same
+run). Not a correctness guarantee the way `identity_unresolved`
+enforcement is — code can't independently verify which cause is actually
+right without redoing the same reasoning the model already got wrong.
+What it can guarantee: whenever this specific shape recurs, the
+overconfident event gets a real confidence discount and a code-authored
+caveat, every time, rather than depending on the model noticing the risk
+itself (see `confidence.py`'s `apply_mode_ceiling` for the discount side).
 """
 
 from __future__ import annotations
@@ -94,4 +110,81 @@ def enforce_identity_unresolved(
             updates["schedule_consistency"] = None
 
         result.append(event.model_copy(update=updates) if updates else event)
+    return result
+
+
+# Categories that assert a specific external cause for a device/circuit —
+# the shape of claim the real E-201 bug got wrong (attributing a reroute to
+# the wrong nearby event). Deliberately excludes device_added/device_removed
+# (their own cause is normally the addition/removal itself, not something
+# external to attribute) and schedule_label_edit/annotation_only/
+# noise_non_material (none of these assert this kind of causal narrative).
+_CAUSALLY_RISKY_CATEGORIES = frozenset(
+    {
+        ChangeCategory.PANEL_RELOCATION,
+        ChangeCategory.DEVICE_RELOCATION,
+        ChangeCategory.CIRCUIT_REROUTE,
+        ChangeCategory.DEVICE_MODIFIED,
+    }
+)
+
+_CROSS_EVENT_CAUSAL_RISK_NOTE = (
+    "This sheet also has a separate, unidentified flagged item; if that item is "
+    "actually related to this change, the stated cause here may need to be revisited."
+)
+
+
+def has_unresolved_sibling(change_events: list[ChangeEvent]) -> bool:
+    """Does this run contain at least one honestly-hedged identity_unresolved
+    event at all — the other half of the co-occurrence signal, checked
+    against `event.identity_unresolved` (the enforced, authoritative value,
+    not the model's raw self-report) so this must run after
+    `enforce_identity_unresolved` has already corrected it."""
+    return any(e.identity_unresolved for e in change_events)
+
+
+def has_cross_event_causal_risk(event: ChangeEvent, change_events: list[ChangeEvent]) -> bool:
+    """True when `event` asserts a specific external cause (a causally-risky
+    category) for something, *and* this same run also has an unresolved,
+    unlinked item that could plausibly be the real cause instead — the
+    real, confirmed E-201 shape. Not a claim this specific event's cause is
+    wrong, only that this run's shape is the one where that's already
+    happened once for real. An event can't trigger its own risk (an
+    identity_unresolved event is already honestly hedged on its own
+    terms)."""
+    return (
+        not event.identity_unresolved
+        and event.category in _CAUSALLY_RISKY_CATEGORIES
+        and has_unresolved_sibling(change_events)
+    )
+
+
+def flag_cross_event_causal_risk(change_events: list[ChangeEvent]) -> list[ChangeEvent]:
+    """Appends (never replaces — this is a real signal, not a certainty the
+    way identity_unresolved is) a fixed, code-authored caveat to
+    `downstream_implications` for every event where
+    `has_cross_event_causal_risk` is true. Flows into `impact_note` for
+    free through `describe.py`'s existing `_build_impact_note`, which
+    already assembles it deterministically from `downstream_implications` —
+    no `describe.py` change needed. Call this after
+    `enforce_identity_unresolved` so `identity_unresolved` already reflects
+    the enforced, authoritative value for every event in the list."""
+    result = []
+    for event in change_events:
+        if not has_cross_event_causal_risk(event, change_events):
+            result.append(event)
+            continue
+        if _CROSS_EVENT_CAUSAL_RISK_NOTE in event.downstream_implications:
+            result.append(event)
+            continue
+        result.append(
+            event.model_copy(
+                update={
+                    "downstream_implications": [
+                        *event.downstream_implications,
+                        _CROSS_EVENT_CAUSAL_RISK_NOTE,
+                    ]
+                }
+            )
+        )
     return result

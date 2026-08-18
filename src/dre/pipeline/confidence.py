@@ -5,6 +5,7 @@ from dre.llm.client import call_structured, encode_image, load_prompt
 from dre.models.schemas import ChangeEvent, ConfidenceFactors, ConfidenceScore
 from dre.pipeline.base import PipelineContext, PipelineStep
 from dre.pipeline.classify import SINGLE_SHEET_NOTE
+from dre.pipeline.identity_resolution import has_cross_event_causal_risk
 
 # Note: temperature is NOT used as a consistency lever here. claude-sonnet-5
 # (the current model) rejects the parameter outright (400 "temperature is
@@ -38,6 +39,21 @@ _SINGLE_SHEET_CORROBORATION_CEILING = 0.7
 # item whose identity can't even be pinned down is never "textbook clear",
 # regardless of how the model itself scored it.
 _UNRESOLVED_IDENTITY_AMBIGUITY_CAP = 0.3
+
+# docs/pipeline_notes.md, "reason can fabricate a confident causal claim
+# while the real cause sits orphaned nearby, unlinked" (the real E-201
+# case): a real, weaker-than-identity_unresolved signal, not a claim this
+# event's cause is actually wrong — so capped well above
+# _UNRESOLVED_IDENTITY_AMBIGUITY_CAP, just low enough to keep the event out
+# of the "textbook clear" >=0.93 band regardless of how clean its other
+# evidence looks (E-201's bad evt1 scored 0.8525 — squarely in that band —
+# specifically because its other bundled items really were clear). A
+# starting point, not a calibrated number: confirmed against exactly one
+# real instance so far. See ConfidenceScore.cross_event_causal_risk_flagged
+# for the passive logging meant to accumulate real evidence before this
+# gets tuned further, same pattern as DPI/MIN_SHARED_TOKENS elsewhere in
+# this codebase.
+_CROSS_EVENT_CAUSAL_RISK_AMBIGUITY_CEILING = 0.75
 
 
 def synthesize_score(
@@ -96,12 +112,16 @@ def apply_mode_ceiling(
     ambiguity_factor: float,
     mode: str,
     identity_unresolved: bool,
+    cross_event_causal_risk: bool = False,
 ) -> tuple[float, float, float]:
     """Clamps the model-reported factors before synthesis. single_sheet mode
     can never reach the two-image ceiling regardless of how clean the
     markup is; identity_unresolved items can never be "textbook clear"
-    regardless of mode. image_quality_factor is untouched — scan quality is
-    a real, independently-assessable property either way."""
+    regardless of mode; cross_event_causal_risk (docs/pipeline_notes.md)
+    keeps an event out of the textbook-clear band when this run also has an
+    unresolved item that could plausibly be its real, unlinked cause.
+    image_quality_factor is untouched — scan quality is a real,
+    independently-assessable property either way."""
     if mode == "single_sheet":
         ambiguity_factor = min(ambiguity_factor, _SINGLE_SHEET_AMBIGUITY_CEILING)
         cross_sheet_corroboration_factor = min(
@@ -109,11 +129,17 @@ def apply_mode_ceiling(
         )
     if identity_unresolved:
         ambiguity_factor = min(ambiguity_factor, _UNRESOLVED_IDENTITY_AMBIGUITY_CAP)
+    elif cross_event_causal_risk:
+        ambiguity_factor = min(ambiguity_factor, _CROSS_EVENT_CAUSAL_RISK_AMBIGUITY_CEILING)
     return image_quality_factor, cross_sheet_corroboration_factor, ambiguity_factor
 
 
 def _to_confidence_score(
-    factors: ConfidenceFactors, *, mode: str, identity_unresolved: bool
+    factors: ConfidenceFactors,
+    *,
+    mode: str,
+    identity_unresolved: bool,
+    cross_event_causal_risk: bool = False,
 ) -> ConfidenceScore:
     image_quality_factor, cross_sheet_corroboration_factor, ambiguity_factor = apply_mode_ceiling(
         image_quality_factor=factors.image_quality_factor,
@@ -121,6 +147,7 @@ def _to_confidence_score(
         ambiguity_factor=factors.ambiguity_factor,
         mode=mode,
         identity_unresolved=identity_unresolved,
+        cross_event_causal_risk=cross_event_causal_risk,
     )
     score = synthesize_score(
         image_quality_factor=image_quality_factor,
@@ -138,6 +165,7 @@ def _to_confidence_score(
         ambiguity_factor_raw=factors.ambiguity_factor,
         ambiguity_note=factors.ambiguity_note,
         rationale=factors.rationale,
+        cross_event_causal_risk_flagged=cross_event_causal_risk,
     )
 
 
@@ -164,8 +192,9 @@ class ConfidenceStep(PipelineStep):
     swapped independently (e.g. replaced by a calibrated model trained on
     `human_reviews` corrections later). The model only assesses the three
     underlying factors; the final score is computed deterministically from
-    them (see `synthesize_score`), with a mode/identity_unresolved ceiling
-    clamp applied first (see `apply_mode_ceiling`).
+    them (see `synthesize_score`), with a mode/identity_unresolved/
+    cross_event_causal_risk ceiling clamp applied first (see
+    `apply_mode_ceiling`).
 
     One Claude call per `ChangeEvent`, not one batched call for all of them.
     A real production run surfaced cross-contamination between two events
@@ -199,7 +228,12 @@ class ConfidenceStep(PipelineStep):
                 model=self.model_used,
             )
             scores.append(
-                _to_confidence_score(factors, mode=ctx.mode, identity_unresolved=event.identity_unresolved)
+                _to_confidence_score(
+                    factors,
+                    mode=ctx.mode,
+                    identity_unresolved=event.identity_unresolved,
+                    cross_event_causal_risk=has_cross_event_causal_risk(event, ctx.change_events),
+                )
             )
 
         ctx.confidence_scores = {s.change_event_id: s for s in scores}
