@@ -31,6 +31,7 @@ from dre.pipeline.tile_merge import (
     group_merge_candidates,
 )
 from dre.pipeline.tile_tuning import DEFAULT_MAX_PARALLEL_TILE_WORKERS, run_detect_single_on_grid
+from dre.tiling import compute_tile_grid
 from dre.tiling_trigger import compute_tiling_trigger_diagnostics
 
 TILED_DETECT_DPI = 150.0
@@ -302,4 +303,76 @@ def decide_and_apply_tiling(
         path="tiled",
         trigger_diagnostics=diagnostics_dict,
         volume_cap_diagnostics=cap_diagnostics.model_dump(mode="json"),
+    )
+
+
+# docs/tiled_analysis_findings.md §3e: minimal duration hint, reusing §3a's
+# cheap page-size pre-filter — computed from the PDF's own page size via
+# compute_tile_grid, no Claude call, before the trigger rule (which needs a
+# real detect_single call to have already happened) is even reachable. This
+# deliberately over-flags: it can only tell "tiling is geometrically
+# possible at 150 DPI" (>1 tile), not whether §3a's real retry-driven
+# trigger will actually fire — the same real sheet (E-101.3) can need >1
+# tile geometrically while never tripping the content-based trigger. That's
+# an accepted false-positive rate for a cheap early warning, not a bug: the
+# real cost of pushing this to a wrong node in the outcome tree is
+# uneven — telling Lovable to expect a couple of extra minutes on a sheet
+# that turns out fast is a shrug, telling it to expect ~1 minute on a sheet
+# that then takes 3-4 is the actual production incident this exists to
+# prevent (see §3e's own framing).
+#
+# Both constants are real, evidence-based numbers, not guesses:
+# - DEFAULT_SINGLE_PASS_ESTIMATE_SECONDS: real observed single_sheet totals
+#   across this session's non-tiled runs (detect+classify+reason+
+#   confidence+describe) have landed in the 30-90s range.
+# - DEFAULT_TILED_ESTIMATE_SECONDS: the real, actually-measured total
+#   wall-clock time of a real parallel tiled E-101.2 run (20 tiles,
+#   max_workers=6) validating §3f — 177.4s end to end (down from 248.7s
+#   sequential; the tile-detection phase itself dropped 129s -> 38s,
+#   ~3.4x — the rest of the pipeline, classify onward, is unaffected by
+#   tiling either way and stayed sequential in both runs). One real
+#   measurement, not an average — a starting point, same posture as every
+#   other constant introduced this way.
+DEFAULT_SINGLE_PASS_ESTIMATE_SECONDS = 60
+DEFAULT_TILED_ESTIMATE_SECONDS = 180
+
+
+class DurationEstimate(BaseModel):
+    tiling_likely: bool
+    estimated_duration_seconds: int
+    reason: str
+
+
+def estimate_analysis_duration(
+    pdf_bytes: Optional[bytes], *, dpi: float = TILED_DETECT_DPI
+) -> DurationEstimate:
+    """Pure, cheap, no Claude call — the whole point of §3e. `pdf_bytes` is
+    `None` (or non-PDF) for a plain image upload, which can't be tiled at
+    all today (see module docstring), so it always gets the single-pass
+    estimate regardless of size."""
+    if pdf_bytes is None or not is_pdf(pdf_bytes):
+        return DurationEstimate(
+            tiling_likely=False,
+            estimated_duration_seconds=DEFAULT_SINGLE_PASS_ESTIMATE_SECONDS,
+            reason="Not a PDF source — tiling doesn't apply regardless of sheet size.",
+        )
+
+    sheet_width_in, sheet_height_in = sheet_dimensions_in_inches(pdf_bytes)
+    tiles = compute_tile_grid(
+        sheet_width_in=sheet_width_in, sheet_height_in=sheet_height_in, target_dpi=dpi
+    )
+    if len(tiles) > 1:
+        return DurationEstimate(
+            tiling_likely=True,
+            estimated_duration_seconds=DEFAULT_TILED_ESTIMATE_SECONDS,
+            reason=(
+                f"Sheet is large enough ({sheet_width_in:.0f}x{sheet_height_in:.0f} in, "
+                f"{len(tiles)} tiles at {dpi:.0f} DPI) that tiled analysis may apply, "
+                "which takes longer than a standard single-pass analysis."
+            ),
+        )
+    return DurationEstimate(
+        tiling_likely=False,
+        estimated_duration_seconds=DEFAULT_SINGLE_PASS_ESTIMATE_SECONDS,
+        reason="Sheet size doesn't require tiling at the validated DPI target.",
     )

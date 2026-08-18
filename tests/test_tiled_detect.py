@@ -19,9 +19,12 @@ from dre.pipeline.base import PipelineContext
 from dre.pipeline.tile_merge import TiledDetection
 from dre.pipeline.tiled_detect import (
     CLASSIFY_DETECTION_CAP,
+    DEFAULT_SINGLE_PASS_ESTIMATE_SECONDS,
+    DEFAULT_TILED_ESTIMATE_SECONDS,
     VolumeCapDiagnostics,
     _cap_detection_volume,
     decide_and_apply_tiling,
+    estimate_analysis_duration,
     merge_tiled_detections,
     sheet_dimensions_in_inches,
 )
@@ -353,3 +356,69 @@ def test_asserts_on_two_image_mode_rather_than_silently_no_oping():
 
     with pytest.raises(AssertionError):
         decide_and_apply_tiling(ctx, raw_pdf_bytes=None)
+
+
+# ---- estimate_analysis_duration (docs/tiled_analysis_findings.md §3e) ----
+
+
+def _real_pdf_bytes(width_in: float, height_in: float) -> bytes:
+    import fitz
+
+    doc = fitz.open()
+    doc.new_page(width=width_in * 72, height=height_in * 72)
+    pdf_bytes = doc.tobytes()
+    doc.close()
+    return pdf_bytes
+
+
+def test_estimate_flags_tiling_likely_for_a_real_large_sheet():
+    """ARCH-E-sized (36x48in) - real precedent: E-101.2 (50x36in) needed 20
+    tiles at 150 DPI, so a sheet in this range is exactly the shape §3a's
+    cheap pre-filter is meant to catch early."""
+    pdf_bytes = _real_pdf_bytes(36, 48)
+    estimate = estimate_analysis_duration(pdf_bytes)
+
+    assert estimate.tiling_likely is True
+    assert estimate.estimated_duration_seconds == DEFAULT_TILED_ESTIMATE_SECONDS
+    assert "tile" in estimate.reason.lower()
+
+
+def test_estimate_flags_tiling_unlikely_for_a_real_small_sheet():
+    """Letter-sized (8.5x11in) - real precedent: this is the same size-only
+    reasoning §3a's cheap pre-filter uses to rule out small sheets before
+    spending anything on the real content-based trigger check."""
+    pdf_bytes = _real_pdf_bytes(8.5, 11)
+    estimate = estimate_analysis_duration(pdf_bytes)
+
+    assert estimate.tiling_likely is False
+    assert estimate.estimated_duration_seconds == DEFAULT_SINGLE_PASS_ESTIMATE_SECONDS
+
+
+def test_estimate_handles_a_non_pdf_source_as_single_pass():
+    """A plain image upload can't be tiled at all today regardless of
+    size (module docstring) - must degrade the same as a small sheet, not
+    crash trying to read a PDF page size from non-PDF bytes."""
+    estimate = estimate_analysis_duration(b"\x89PNG\r\n\x1a\nnot a real pdf")
+
+    assert estimate.tiling_likely is False
+    assert estimate.estimated_duration_seconds == DEFAULT_SINGLE_PASS_ESTIMATE_SECONDS
+    assert "not a pdf" in estimate.reason.lower()
+
+
+def test_estimate_handles_none_pdf_bytes():
+    estimate = estimate_analysis_duration(None)
+    assert estimate.tiling_likely is False
+    assert estimate.estimated_duration_seconds == DEFAULT_SINGLE_PASS_ESTIMATE_SECONDS
+
+
+def test_estimate_makes_no_api_call():
+    """The whole point of §3e: cheap enough to call speculatively. Real
+    proof, not just an absence of imports - patch out the one thing that
+    would make this expensive (the tile-grid detect call) and confirm it's
+    simply never reachable from this function at all."""
+    import dre.pipeline.tiled_detect as tiled_detect_module
+
+    with patch.object(
+        tiled_detect_module, "run_detect_single_on_grid", side_effect=AssertionError("should never be called")
+    ):
+        estimate_analysis_duration(_real_pdf_bytes(36, 48))  # would raise if it touched the API path

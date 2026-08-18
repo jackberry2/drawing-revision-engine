@@ -92,6 +92,48 @@ def analyze_single(analysis_request_id: str, dry_run: bool = False) -> dict:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@app.get(
+    "/analyze-single/{analysis_request_id}/duration-estimate",
+    dependencies=[Depends(require_api_key)],
+)
+def duration_estimate(analysis_request_id: str) -> dict:
+    """docs/tiled_analysis_findings.md §3e: call this before (or without
+    waiting for) the real POST /analyze-single, to show a real "this may
+    take a few minutes" hint instead of a bare spinner — a tiled sheet's
+    longer processing time otherwise looks identical to a hang, the exact
+    class of problem that already caused a real incident this session (the
+    cold-start "Can't reach the server" investigation). No Claude call —
+    just a Storage download and cheap page-size geometry, so it's safe to
+    call speculatively/eagerly, unlike the real analyze call.
+
+    single_sheet mode only, same scope as `/analyze-single` itself —
+    two_image tiling doesn't exist (see docs/tiled_analysis_findings.md
+    §5), so there's nothing this could estimate differently for it.
+    """
+    try:
+        analysis_request = repo.get_analysis_request(analysis_request_id)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=404, detail=f"analysis_request {analysis_request_id!r} not found"
+        ) from exc
+
+    mode = analysis_request.get("mode") or "two_image"
+    if mode != "single_sheet":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"analysis_request {analysis_request_id} has mode={mode!r}, not "
+                "'single_sheet' — duration estimates are only meaningful for the "
+                "mode tiling applies to."
+            ),
+        )
+
+    try:
+        return service.estimate_duration(analysis_request_id)
+    except Exception as exc:  # noqa: BLE001 - surfaced to the caller as a 500 with detail
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}

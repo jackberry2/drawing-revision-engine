@@ -27,7 +27,7 @@ from typing import Any, Optional
 from dre.mapping import to_change_type, to_confidence_percentage, to_confidence_tier
 from dre.pipeline.base import NullStepLogger, PipelineContext
 from dre.pipeline.runner import build_pipeline
-from dre.pipeline.tiled_detect import decide_and_apply_tiling
+from dre.pipeline.tiled_detect import decide_and_apply_tiling, estimate_analysis_duration
 from dre.supa import repository as repo
 from dre.supa.repository import SupabaseStepLogger
 from dre.tiling_trigger import compute_tiling_trigger_diagnostics
@@ -42,6 +42,35 @@ def _mapped_preview(alert) -> dict[str, Any]:
         "confidence_percentage": to_confidence_percentage(alert.confidence.score),
         "impact_note": alert.impact_note,
     }
+
+
+def estimate_duration(analysis_request_id: str) -> dict[str, Any]:
+    """docs/tiled_analysis_findings.md §3e: a cheap, no-Claude-call estimate
+    Lovable can fetch before (or instead of waiting on) the real analyze
+    call, so a tiled sheet's longer processing time doesn't look like a
+    hang. single_sheet mode only — mirrors `analyze_request`'s own
+    old/new-drawing-id resolution for that mode; two_image tiling doesn't
+    exist (see docs/tiled_analysis_findings.md §5), so this is scoped the
+    same way `/analyze-single` itself already is."""
+    analysis_request = repo.get_analysis_request(analysis_request_id)
+    mode = analysis_request.get("mode") or "two_image"
+    if mode != "single_sheet":
+        raise ValueError(
+            f"analysis_request {analysis_request_id} has mode={mode!r}, not 'single_sheet'"
+        )
+
+    sheet_drawing_id = analysis_request.get("old_drawing_id") or analysis_request.get(
+        "new_drawing_id"
+    )
+    if not sheet_drawing_id:
+        raise ValueError(
+            f"analysis_request {analysis_request_id} is mode='single_sheet' but "
+            "neither old_drawing_id nor new_drawing_id is set"
+        )
+    drawing = repo.get_drawing(sheet_drawing_id)
+    raw_bytes = repo.download_drawing_raw_bytes(drawing)
+    estimate = estimate_analysis_duration(raw_bytes)
+    return {"analysis_request_id": analysis_request_id, **estimate.model_dump(mode="json")}
 
 
 def analyze_request(analysis_request_id: str, *, dry_run: bool = False) -> dict[str, Any]:

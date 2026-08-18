@@ -99,6 +99,14 @@ def download_drawing_image_and_raw_bytes(
     return dest_path, data
 
 
+def download_drawing_raw_bytes(drawing: dict) -> bytes:
+    """Raw pre-normalization bytes only, no local file written — for
+    callers that just need to inspect the source (e.g. §3e's duration
+    estimate, which only needs the PDF's page size) without running it
+    through the real pipeline."""
+    return get_client().storage.from_(config.SUPABASE_DRAWINGS_BUCKET).download(drawing["file_path"])
+
+
 def set_analysis_status(analysis_request_id: str, status: str) -> None:
     get_client().table("analysis_requests").update({"status": status}).eq(
         "id", analysis_request_id

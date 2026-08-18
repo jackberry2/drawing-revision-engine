@@ -86,3 +86,64 @@ def test_analyze_single_accepts_correct_key_and_reaches_service(monkeypatch):
     assert resp.status_code == 200
     assert resp.json() == {"ok": True}
     mock_analyze.assert_called_once_with("some-id", dry_run=False)
+
+
+def test_duration_estimate_rejects_missing_key(monkeypatch):
+    monkeypatch.setattr(config, "DRE_API_KEY", "correct-key")
+    resp = _client().get("/analyze-single/some-id/duration-estimate")
+    assert resp.status_code == 401
+
+
+def test_duration_estimate_404s_when_request_not_found(monkeypatch):
+    monkeypatch.setattr(config, "DRE_API_KEY", "correct-key")
+    with patch("dre.api.repo.get_analysis_request", side_effect=Exception("not found")):
+        resp = _client().get(
+            "/analyze-single/missing-id/duration-estimate", headers={"X-API-Key": "correct-key"}
+        )
+    assert resp.status_code == 404
+
+
+def test_duration_estimate_rejects_two_image_mode_request(monkeypatch):
+    monkeypatch.setattr(config, "DRE_API_KEY", "correct-key")
+    with patch(
+        "dre.api.repo.get_analysis_request",
+        return_value={"id": "some-id", "mode": "two_image"},
+    ):
+        resp = _client().get(
+            "/analyze-single/some-id/duration-estimate", headers={"X-API-Key": "correct-key"}
+        )
+    assert resp.status_code == 400
+    assert "single_sheet" in resp.json()["detail"]
+
+
+def test_duration_estimate_accepts_correct_key_and_reaches_service(monkeypatch):
+    monkeypatch.setattr(config, "DRE_API_KEY", "correct-key")
+    fake_estimate = {
+        "analysis_request_id": "some-id",
+        "tiling_likely": True,
+        "estimated_duration_seconds": 180,
+        "reason": "n/a",
+    }
+    with patch(
+        "dre.api.repo.get_analysis_request",
+        return_value={"id": "some-id", "mode": "single_sheet"},
+    ), patch(
+        "dre.api.service.estimate_duration", return_value=fake_estimate
+    ) as mock_estimate:
+        resp = _client().get(
+            "/analyze-single/some-id/duration-estimate", headers={"X-API-Key": "correct-key"}
+        )
+    assert resp.status_code == 200
+    assert resp.json() == fake_estimate
+    mock_estimate.assert_called_once_with("some-id")
+
+
+def test_duration_estimate_does_not_require_dry_run_or_post():
+    """A GET, unlike the real analyze routes - no side effects, safe to
+    call speculatively/eagerly (docs/tiled_analysis_findings.md §3e)."""
+    from dre import api as api_module
+
+    route = next(
+        r for r in api_module.app.routes if getattr(r, "path", None) == "/analyze-single/{analysis_request_id}/duration-estimate"
+    )
+    assert route.methods == {"GET"}

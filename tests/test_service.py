@@ -334,3 +334,54 @@ def test_dry_run_never_deletes_prior_flagged_changes():
 
     mock_delete.assert_not_called()
     assert result["dry_run"] is True
+
+
+# ---- estimate_duration (docs/tiled_analysis_findings.md §3e) -------------
+
+
+def test_estimate_duration_rejects_two_image_mode():
+    analysis_request = {"id": "ar11", "mode": "two_image"}
+    with patch("dre.service.repo.get_analysis_request", return_value=analysis_request):
+        with pytest.raises(ValueError, match="single_sheet"):
+            service.estimate_duration("ar11")
+
+
+def test_estimate_duration_raises_clearly_when_both_drawing_ids_null():
+    analysis_request = {
+        "id": "ar12",
+        "mode": "single_sheet",
+        "old_drawing_id": None,
+        "new_drawing_id": None,
+    }
+    with patch("dre.service.repo.get_analysis_request", return_value=analysis_request):
+        with pytest.raises(ValueError, match="neither old_drawing_id nor new_drawing_id"):
+            service.estimate_duration("ar12")
+
+
+def test_estimate_duration_uses_new_drawing_id_when_old_is_null_and_makes_no_api_call():
+    """Same real Lovable convention as analyze_request's own resolution
+    (new_drawing_id set, old_drawing_id NULL) - and confirms this reaches
+    only Storage + pure geometry, never the real pipeline/Claude."""
+    analysis_request = {
+        "id": "ar13",
+        "mode": "single_sheet",
+        "old_drawing_id": None,
+        "new_drawing_id": "d-new",
+    }
+    drawing = {"id": "d-new", "file_path": "sheet.pdf"}
+
+    with patch(
+        "dre.service.repo.get_analysis_request", return_value=analysis_request
+    ), patch(
+        "dre.service.repo.get_drawing", return_value=drawing
+    ) as mock_get_drawing, patch(
+        "dre.service.repo.download_drawing_raw_bytes", return_value=b"not-a-real-pdf"
+    ) as mock_download:
+        result = service.estimate_duration("ar13")
+
+    mock_get_drawing.assert_called_once_with("d-new")
+    mock_download.assert_called_once_with(drawing)
+    assert result["analysis_request_id"] == "ar13"
+    assert result["tiling_likely"] is False  # not a real PDF -> single-pass estimate
+    assert "estimated_duration_seconds" in result
+    assert "reason" in result
