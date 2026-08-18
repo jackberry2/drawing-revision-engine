@@ -77,6 +77,28 @@ def download_drawing_image(drawing: dict, dest_dir: Path, basename: str) -> Path
     return dest_path
 
 
+def download_drawing_image_and_raw_bytes(
+    drawing: dict, dest_dir: Path, basename: str
+) -> tuple[Path, bytes]:
+    """Same as `download_drawing_image`, but also returns the raw
+    pre-normalization bytes as downloaded from Storage. Only single_sheet
+    mode's sheet drawing needs this — tiling (docs/tiled_analysis_
+    findings.md §3b) re-rasterizes tiles from the *original* PDF, not from
+    the already-resolution-capped full-page PNG `normalize_drawing_bytes`
+    produces, so those raw bytes have to survive somewhere. A dedicated
+    function rather than changing `download_drawing_image`'s return shape
+    keeps every other caller (two_image mode's old/new fetches, which never
+    need raw bytes) untouched, and avoids downloading the same file twice
+    over the network for the one case that does."""
+    data = get_client().storage.from_(config.SUPABASE_DRAWINGS_BUCKET).download(
+        drawing["file_path"]
+    )
+    image_bytes, media_type = normalize_drawing_bytes(data)
+    dest_path = dest_dir / f"{basename}{extension_for_media_type(media_type)}"
+    dest_path.write_bytes(image_bytes)
+    return dest_path, data
+
+
 def set_analysis_status(analysis_request_id: str, status: str) -> None:
     get_client().table("analysis_requests").update({"status": status}).eq(
         "id", analysis_request_id
@@ -117,6 +139,18 @@ def log_tiling_trigger_diagnostics(run_id: str, diagnostics: dict) -> None:
     get_client().table("pipeline_runs").update(
         {"tiling_trigger_diagnostics": diagnostics}
     ).eq("id", run_id).execute()
+
+
+def set_tiling_path(run_id: str, path: str) -> None:
+    """Which real path a run actually took — 'single_pass', 'tiled',
+    'tiled_failed_fallback', or 'not_applicable' (two_image mode). See
+    migration 0005_tiling_path.sql. Distinct from `would_trigger` in
+    `tiling_trigger_diagnostics`: that's what the rule said; this is what
+    actually happened (it can differ — e.g. the rule fires but the source
+    isn't a tileable PDF, or tiling is attempted and falls back)."""
+    get_client().table("pipeline_runs").update({"tiling_path": path}).eq(
+        "id", run_id
+    ).execute()
 
 
 def log_step(

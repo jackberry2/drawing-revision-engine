@@ -136,16 +136,19 @@ def tile_detect_grid(
     )
     click.echo(f"Grid: {len(tiles)} tiles at {dpi} DPI — running detect_single on each...\n")
 
-    detections = run_detect_single_on_grid(
+    grid_result = run_detect_single_on_grid(
         pdf_path.read_bytes(),
         sheet_width_in=sheet_width_in,
         sheet_height_in=sheet_height_in,
         dpi=dpi,
         **grid_kwargs,
     )
-    click.echo(f"{len(detections)} total detections across the grid.\n")
+    click.echo(
+        f"{len(grid_result.tiled_detections)} total detection(s), "
+        f"{len(grid_result.extracted_tables)} table(s) (raw, un-deduped) across the grid.\n"
+    )
 
-    diagnostics = compute_merge_diagnostics(detections)
+    diagnostics = compute_merge_diagnostics(grid_result.tiled_detections)
     click.echo(
         f"Merge diagnostics: {diagnostics.evaluated_pairs} adjacent pair(s) evaluated, "
         f"{diagnostics.matched_pairs} matched MIN_SHARED_TOKENS, "

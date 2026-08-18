@@ -27,6 +27,7 @@ from typing import Any, Optional
 from dre.mapping import to_change_type, to_confidence_percentage, to_confidence_tier
 from dre.pipeline.base import NullStepLogger, PipelineContext
 from dre.pipeline.runner import build_pipeline
+from dre.pipeline.tiled_detect import decide_and_apply_tiling
 from dre.supa import repository as repo
 from dre.supa.repository import SupabaseStepLogger
 from dre.tiling_trigger import compute_tiling_trigger_diagnostics
@@ -86,10 +87,22 @@ def analyze_request(analysis_request_id: str, *, dry_run: bool = False) -> dict[
     )
     logger = NullStepLogger() if dry_run else SupabaseStepLogger()
 
+    tiling_outcome_holder: dict[str, Any] = {}
+
     try:
         with tempfile.TemporaryDirectory(prefix=f"dre_{run_id}_") as tmp:
             tmp_dir = Path(tmp)
-            old_path = repo.download_drawing_image(old_drawing, tmp_dir, "old")
+            raw_old_bytes: Optional[bytes] = None
+            if mode == "single_sheet":
+                # Tiling (docs/tiled_analysis_findings.md §3b) re-rasterizes
+                # from the *original* PDF, not the already-resolution-capped
+                # full-page PNG — so the raw bytes need to survive past this
+                # download, only for the one mode that can ever tile.
+                old_path, raw_old_bytes = repo.download_drawing_image_and_raw_bytes(
+                    old_drawing, tmp_dir, "old"
+                )
+            else:
+                old_path = repo.download_drawing_image(old_drawing, tmp_dir, "old")
             new_path = None
             if new_drawing is not None:
                 new_path = repo.download_drawing_image(new_drawing, tmp_dir, "new")
@@ -102,7 +115,31 @@ def analyze_request(analysis_request_id: str, *, dry_run: bool = False) -> dict[
                 sheet_ref=analysis_request["sheet_number"],
             )
             pipeline = build_pipeline(logger=logger, mode=mode)
-            result = pipeline.run(ctx)
+
+            def _on_after_detect(pipeline_ctx: PipelineContext) -> None:
+                # single_sheet only — two_image tiling has no design or
+                # validation behind it (docs/tiled_analysis_findings.md §5).
+                if pipeline_ctx.mode != "single_sheet":
+                    return
+                outcome = decide_and_apply_tiling(pipeline_ctx, raw_pdf_bytes=raw_old_bytes)
+                tiling_outcome_holder["outcome"] = outcome
+                if outcome.path == "tiled":
+                    # Logged separately from the detect_single step it
+                    # replaces, so pipeline_steps shows both the original
+                    # single-pass output AND what tiling produced instead —
+                    # not just the final, already-swapped-in result.
+                    logger.log_step(
+                        run_id=pipeline_ctx.run_id,
+                        step_name="tile_merge",
+                        step_order=1,
+                        input_data={"trigger_diagnostics": outcome.trigger_diagnostics},
+                        output_data=pipeline_ctx.detect_single_result,
+                        model_used=None,
+                        prompt_version="v1",
+                        latency_ms=None,
+                    )
+
+            result = pipeline.run(ctx, on_after_detect=_on_after_detect)
     except Exception:
         if not dry_run:
             repo.set_run_status(run_id, "failed")
@@ -125,19 +162,40 @@ def analyze_request(analysis_request_id: str, *, dry_run: bool = False) -> dict[
     # what flagged_changes.drawing_id points at.
     result_drawing = new_drawing if new_drawing is not None else old_drawing
 
-    # Passive data collection for docs/tiled_analysis_findings.md §3a — logs
-    # whether that document's tiling trigger rule would fire against this
-    # real run's detect output, regardless of whether tiling itself ever
-    # gets built. See dre.tiling_trigger. Never allowed to break the real
-    # write path below it: this is auxiliary data collection, not part of
-    # the guarantee callers depend on, so a failure here (e.g. the migration
-    # adding pipeline_runs.tiling_trigger_diagnostics not yet applied) is
-    # swallowed rather than failing the whole analysis.
+    # Data collection for docs/tiled_analysis_findings.md §3a — logs whether
+    # that document's tiling trigger rule fired against this real run's
+    # *original single-pass* detect output. single_sheet mode: the rule was
+    # already checked (and, if it fired, acted on) by decide_and_apply_
+    # tiling via the on_after_detect hook above — reuse that outcome's
+    # diagnostics rather than recomputing against ctx.detect_single_result,
+    # which may now be the already-replaced tiled result, not the signal
+    # the rule actually evaluated. two_image mode: tiling has no branch
+    # built for it yet (§5), so this stays passive-logging-only, same as
+    # before. Never allowed to break the real write path below it: this is
+    # auxiliary data collection (or, for single_sheet, already-computed data
+    # being persisted), not part of the guarantee callers depend on, so a
+    # failure here (e.g. a migration not yet applied) is swallowed rather
+    # than failing the whole analysis.
+    if mode == "single_sheet":
+        tiling_outcome = tiling_outcome_holder.get("outcome")
+        tiling_diagnostics_dict = tiling_outcome.trigger_diagnostics if tiling_outcome else None
+        tiling_path = tiling_outcome.path if tiling_outcome else "single_pass"
+    else:
+        try:
+            tiling_diagnostics_dict = compute_tiling_trigger_diagnostics(
+                ctx.detect_result
+            ).model_dump(mode="json")
+        except Exception:
+            tiling_diagnostics_dict = None
+        tiling_path = "not_applicable"
+
+    if tiling_diagnostics_dict is not None:
+        try:
+            repo.log_tiling_trigger_diagnostics(run_id, tiling_diagnostics_dict)
+        except Exception:
+            pass
     try:
-        detect_result = ctx.detect_single_result if mode == "single_sheet" else ctx.detect_result
-        assert detect_result is not None
-        tiling_diagnostics = compute_tiling_trigger_diagnostics(detect_result)
-        repo.log_tiling_trigger_diagnostics(run_id, tiling_diagnostics.model_dump(mode="json"))
+        repo.set_tiling_path(run_id, tiling_path)
     except Exception:
         pass
 

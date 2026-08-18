@@ -15,12 +15,26 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
+from dataclasses import dataclass, field
+
 from dre.imaging import rasterize_pdf_tile_to_png
-from dre.models.schemas import SingleSheetDetectResult
+from dre.models.schemas import ExtractedTable, SingleSheetDetectResult
 from dre.pipeline.base import PipelineContext
 from dre.pipeline.detect_single import DetectSingleStep
 from dre.pipeline.tile_merge import TiledDetection
 from dre.tiling import DEFAULT_OVERLAP_FRACTION, DEFAULT_TILE_EDGE_PX, TileSpec, compute_tile_grid
+
+
+@dataclass(frozen=True)
+class GridDetectResult:
+    """Every tile's detections (tagged with tile coords, see `TiledDetection`)
+    plus every tile's `extracted_tables`, concatenated with no cross-tile
+    dedup — that reconciliation is the caller's job (§3c for detections is
+    `tile_merge`; table dedup has no design yet, see
+    docs/tiled_analysis_findings.md §3c)."""
+
+    tiled_detections: list[TiledDetection] = field(default_factory=list)
+    extracted_tables: list[ExtractedTable] = field(default_factory=list)
 
 
 def run_detect_single_on_tile(
@@ -42,7 +56,7 @@ def run_detect_single_on_grid(
     dpi: float,
     tile_edge_px: int = DEFAULT_TILE_EDGE_PX,
     overlap_fraction: float = DEFAULT_OVERLAP_FRACTION,
-) -> list[TiledDetection]:
+) -> GridDetectResult:
     """Runs `run_detect_single_on_tile` against every tile in the grid,
     sequentially — real API cost scales directly with tile count (§4), so
     this is for deliberate harness/calibration use, not something to call
@@ -50,7 +64,8 @@ def run_detect_single_on_grid(
     threshold calibration data (§3c): there's no production tiled flow to
     passively log from yet, but this makes it possible to gather more real
     known-good/known-miss data points today, ahead of that integration
-    existing.
+    existing. Also the function the real production tiled branch
+    (`dre.pipeline.tiled_detect`) calls — this is no longer harness-only.
 
     `tile_edge_px`/`overlap_fraction` are passed straight through to
     `compute_tile_grid` — kept overridable here for the same reason
@@ -64,10 +79,12 @@ def run_detect_single_on_grid(
         overlap_fraction=overlap_fraction,
     )
     tiled_detections: list[TiledDetection] = []
+    extracted_tables: list[ExtractedTable] = []
     for tile in tiles:
         result = run_detect_single_on_tile(pdf_bytes, tile, dpi=dpi)
         for detection in result.detections:
             tiled_detections.append(
                 TiledDetection(tile_row=tile.row, tile_col=tile.col, detection=detection)
             )
-    return tiled_detections
+        extracted_tables.extend(result.extracted_tables)
+    return GridDetectResult(tiled_detections=tiled_detections, extracted_tables=extracted_tables)

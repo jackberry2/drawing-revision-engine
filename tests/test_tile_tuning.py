@@ -72,7 +72,7 @@ def test_run_detect_single_on_grid_tags_each_tiles_detections_with_its_own_row_c
         )
 
     with patch("dre.pipeline.tile_tuning.DetectSingleStep.execute", side_effect=fake_execute):
-        tiled_detections = run_detect_single_on_grid(
+        grid_result = run_detect_single_on_grid(
             pdf_bytes,
             sheet_width_in=800 / 72,
             sheet_height_in=600 / 72,
@@ -80,8 +80,9 @@ def test_run_detect_single_on_grid_tags_each_tiles_detections_with_its_own_row_c
             tile_edge_px=300,
         )
 
-    assert len(tiled_detections) == len(tiles)
+    assert len(grid_result.tiled_detections) == len(tiles)
     assert call_count["n"] == len(tiles)
-    seen_tile_coords = {(td.tile_row, td.tile_col) for td in tiled_detections}
+    seen_tile_coords = {(td.tile_row, td.tile_col) for td in grid_result.tiled_detections}
     expected_tile_coords = {(t.row, t.col) for t in tiles}
     assert seen_tile_coords == expected_tile_coords
+    assert grid_result.extracted_tables == []

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import time
+from typing import Callable, Optional
 
 from dre.models.schemas import PipelineRunResult
 from dre.pipeline.base import PipelineContext, PipelineStep, StepLogger
+
+_DETECT_STEP_NAMES = ("detect", "detect_single")
 
 
 class Pipeline:
@@ -18,7 +21,20 @@ class Pipeline:
         self.steps = steps
         self.logger = logger
 
-    def run(self, ctx: PipelineContext) -> PipelineRunResult:
+    def run(
+        self,
+        ctx: PipelineContext,
+        *,
+        on_after_detect: Optional[Callable[[PipelineContext], None]] = None,
+    ) -> PipelineRunResult:
+        """`on_after_detect`, if given, runs once right after the detect/
+        detect_single step completes and is logged, before classify runs —
+        the hook docs/tiled_analysis_findings.md's tiling branch needs
+        (checking §3a's trigger rule against the just-computed detect
+        output and, if it fires, replacing `ctx.detect_single_result`
+        in place before the rest of the pipeline reads it). A no-op for
+        any pipeline that doesn't pass one — every other caller
+        (eval harness, tests) is unaffected."""
         for order, step in enumerate(self.steps, start=1):
             input_snapshot = step.input_for_log(ctx)
             t0 = time.perf_counter()
@@ -34,6 +50,8 @@ class Pipeline:
                 prompt_version=step.version,
                 latency_ms=latency_ms,
             )
+            if on_after_detect is not None and step.name in _DETECT_STEP_NAMES:
+                on_after_detect(ctx)
 
         assert ctx.detect_result is not None or ctx.detect_single_result is not None
         return PipelineRunResult(

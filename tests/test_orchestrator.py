@@ -161,3 +161,46 @@ def test_pipeline_end_to_end(tmp_path):
         "describe",
     ]
     assert all(c["run_id"] == "run_test" for c in logger.calls)
+
+
+def test_on_after_detect_hook_fires_once_after_detect_and_before_classify(tmp_path):
+    """docs/tiled_analysis_findings.md's production tiling branch hangs off
+    this hook: it needs to run exactly once, after detect/detect_single has
+    populated ctx.detect_result (so there's something to check the §3a
+    trigger rule against) but before classify reads it (so a replacement
+    result actually reaches the rest of the pipeline)."""
+    old = tmp_path / "old.png"
+    new = tmp_path / "new.png"
+    old.write_bytes(b"fake")
+    new.write_bytes(b"fake")
+
+    calls: list[str] = []
+
+    def on_after_detect(ctx):
+        calls.append("hook")
+        assert ctx.detect_result is not None
+        assert ctx.classified_changes == []
+
+    logger = RecordingStepLogger()
+    ctx = PipelineContext(run_id="run_test", old_image_path=old, new_image_path=new)
+    pipeline = Pipeline([FakeDetect(), FakeClassify(), FakeReason(), FakeConfidence(), FakeDescribe()], logger)
+    pipeline.run(ctx, on_after_detect=on_after_detect)
+
+    assert calls == ["hook"]
+
+
+def test_omitting_on_after_detect_hook_is_unaffected(tmp_path):
+    """Every existing caller (eval harness, every other test) doesn't pass
+    this hook at all — must stay a pure no-op default, not a behavior
+    change for anyone who doesn't opt in."""
+    old = tmp_path / "old.png"
+    new = tmp_path / "new.png"
+    old.write_bytes(b"fake")
+    new.write_bytes(b"fake")
+
+    logger = RecordingStepLogger()
+    ctx = PipelineContext(run_id="run_test", old_image_path=old, new_image_path=new)
+    pipeline = Pipeline([FakeDetect(), FakeClassify(), FakeReason(), FakeConfidence(), FakeDescribe()], logger)
+    result = pipeline.run(ctx)
+
+    assert len(result.alerts) == 1

@@ -654,8 +654,8 @@ points.
   the dedup finding is about *recombining* an element that legitimately
   spans multiple tiles even when each tile's portion is intact. Both are
   real, both point at §3c, but they're different failure mechanisms.)
-- **End-to-end status: what's left before this is a usable feature, not
-  just validated pieces.** Three honestly different buckets:
+- **End-to-end status (updated — branching is now live): what's left
+  before this is a usable feature, not just validated pieces.**
   - **Solid and tested, ready to build on:** grid math (`tiling.py`, pure
     and tested), per-tile rasterization (`imaging.py`, tested and
     eye-verified against a real rendered tile — see §3b/§1), the 150 DPI
@@ -665,36 +665,54 @@ points.
     merge logic v1 (tested against real E-101.2/E-101.3 data, known-safe
     direction, now with its own passive calibration-diagnostics logging
     via the harness).
-  - **Documented requirements, not yet built:** §3e's duration-hint to
+  - **Now actually wired in (single_sheet mode only):**
+    `dre.service.analyze_request` calls §3a's trigger rule against the
+    real single-pass `detect_single` output via a new `Pipeline.run(ctx,
+    on_after_detect=...)` hook — the first point in the pipeline where a
+    step's own result can be inspected and replaced before the next step
+    reads it. When the rule fires against a real PDF source,
+    `dre.pipeline.tiled_detect.decide_and_apply_tiling` runs the full
+    grid → per-tile `detect_single` → §3c merge sequence
+    (`run_tiled_detect_and_merge`) and swaps the merged result into
+    `ctx.detect_single_result` in place, so classify/reason_single/
+    confidence/describe run unchanged against it (§3d). Every real run
+    logs which path it actually took to `pipeline_runs.tiling_path`
+    (migration `0005_tiling_path.sql`) — `single_pass`, `tiled`,
+    `tiled_failed_fallback` (a real tiling error falls back to the
+    already-computed single-pass result rather than failing the request),
+    or `not_applicable` for two_image mode. Deliberately **single_sheet
+    mode only**: the one real production trace confirmed to fire this
+    rule (E-101.2, `tests/test_tiling_trigger.py`) was actually a
+    two_image-mode sheet — two_image tiling would need per-tile
+    `DetectStep` calls against both old and new tile images and a
+    `RawDetection`-shaped merge path, neither of which exists or has been
+    validated, so two_image requests always take `not_applicable`
+    regardless of what the trigger rule says. Regression-tested against
+    the real E-101.3 non-triggering trace to confirm the non-tiling case
+    is a strict no-op (`tests/test_tiled_detect.py`).
+  - **Documented requirements, still not built:** §3e's duration-hint to
     Lovable (needed once real requests can take tile-count-multiplied
     latency, currently undocumented to the caller) and §3f's
     `ThreadPoolExecutor` for parallel tile calls (`llm/client.py` is fully
-    synchronous today — sequential tile calls work in the harness but
-    would multiply real request latency by tile count in production
-    without this).
-  - **Genuine gap, not yet designed at all:** there is currently no
-    orchestration code connecting the pieces above into the real request
-    path. `service.py`/`analyze_request`/`PipelineContext` have zero
-    awareness of tiling — nothing reads §3a's logged `would_trigger` value
-    to actually branch into a tiled flow instead of the existing
-    single-image call. And `extracted_tables` merging across tiles (flagged
-    as needed in §3c's opening paragraph) has no design sketched and no
-    code written — only per-detection merge/dedup has been built; a
-    schedule table split across tiles has no handling yet.
+    synchronous today — the real production tiled path calls tiles
+    sequentially, same as the harness; correctness was the goal of this
+    wiring round, not speed, so a triggering sheet is slow right now, not
+    just in the harness).
+  - **Genuine gap, still not designed at all:** `extracted_tables`
+    merging across tiles has only a naive title-based dedup
+    (`tiled_detect._dedup_tables` — keeps the first occurrence of a
+    repeated table title, doesn't attempt to reconcile rows that differ
+    per tile). A schedule table whose real content actually differs by
+    tile has no correct handling yet.
 
-  **So: not yet a small "wire it in" step.** What exists is a complete,
-  independently-tested toolkit (grid, rasterization, trigger signal, merge
-  logic) plus one production integration point already live (§3a's passive
-  trigger logging). Turning that into an actual tiled analysis path still
-  needs: (1) branching logic in `service.py` that checks the trigger signal
-  and, when it fires, runs the tile grid → per-tile `detect_single` → merge
-  sequence instead of the single-image path; (2) parallel tile execution
-  (§3f) so that path doesn't multiply latency unacceptably; (3) the
-  duration-hint contract change (§3e) so Lovable isn't caught by a timeout
-  when it does; (4) `extracted_tables` cross-tile merging, currently
-  undesigned. None of these four are large individually, but none of them
-  exist yet either — the honest answer to "is a piece left" is yes, the
-  orchestration layer itself, not a finishing touch on what's built.
+  **So: the orchestration gap is closed for single_sheet mode; two real
+  gaps remain before this is production-ready at scale.** Tiling now
+  actually happens on real triggering single-sheet requests, not just in
+  the harness — but (1) it's sequential, so a triggering request is
+  measurably slower than before, with nothing yet telling Lovable to
+  expect that, and (2) a schedule table that genuinely differs across
+  tiles will be silently under-reported. Both are scoped, known next
+  steps, not open questions.
 
 ## Appendix: raw evidence
 

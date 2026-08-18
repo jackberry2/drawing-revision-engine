@@ -11,14 +11,29 @@ from unittest.mock import patch
 import pytest
 
 from dre import service
-from dre.models.schemas import DetectResult, SingleSheetDetectResult
+from dre.models.schemas import DetectResult, ExtractedTable, SingleSheetDetectResult
 
 
-def _fake_pipeline_run(ctx):
+def _fake_pipeline_run(ctx, *, on_after_detect=None):
     if ctx.mode == "single_sheet":
-        ctx.detect_single_result = SingleSheetDetectResult(detections=[], extracted_tables=[])
+        # Real single-sheet detect_single results are non-empty in
+        # production; a genuinely empty one is itself a low-n case that
+        # trips §3a's trigger rule (0 detections, 0 tables -> would_trigger
+        # per the low_n branch) — see test_tiling_wiring.py for that case
+        # covered deliberately. Most of these tests aren't about tiling at
+        # all, so give them one table title (keeps distinct_extracted_
+        # table_titles>=1, matching the low_n branch's non-trigger case)
+        # to stay a clean no-op unless a test overrides this fake.
+        ctx.detect_single_result = SingleSheetDetectResult(
+            detections=[],
+            extracted_tables=[
+                ExtractedTable(id="t1", table_type="other", sheet_version="new", title="NOTES")
+            ],
+        )
     else:
         ctx.detect_result = DetectResult(raw_detections=[], extracted_tables=[])
+    if on_after_detect is not None:
+        on_after_detect(ctx)
     return SimpleNamespace(alerts=[], change_events=[])
 
 
@@ -27,6 +42,10 @@ def _patched(analysis_request: dict, drawings: dict[str, dict]):
         patch("dre.service.repo.get_analysis_request", return_value=analysis_request),
         patch("dre.service.repo.get_drawing", side_effect=lambda did: drawings[did]),
         patch("dre.service.repo.download_drawing_image", side_effect=lambda d, dest: dest),
+        patch(
+            "dre.service.repo.download_drawing_image_and_raw_bytes",
+            side_effect=lambda d, dest_dir, basename: (dest_dir / f"{basename}.png", b"not-a-pdf"),
+        ),
         patch("dre.service.build_pipeline", return_value=SimpleNamespace(run=_fake_pipeline_run)),
     )
 
@@ -45,8 +64,8 @@ def test_single_sheet_uses_new_drawing_id_when_old_is_null():
     with patch("dre.service.repo.get_analysis_request", return_value=analysis_request), patch(
         "dre.service.repo.get_drawing", side_effect=lambda did: drawings[did]
     ) as mock_get_drawing, patch(
-        "dre.service.repo.download_drawing_image",
-        side_effect=lambda d, dest_dir, basename: dest_dir / f"{basename}.png",
+        "dre.service.repo.download_drawing_image_and_raw_bytes",
+        side_effect=lambda d, dest_dir, basename: (dest_dir / f"{basename}.png", b"not-a-pdf"),
     ), patch(
         "dre.service.build_pipeline", return_value=SimpleNamespace(run=_fake_pipeline_run)
     ):
@@ -70,8 +89,8 @@ def test_single_sheet_uses_old_drawing_id_when_set():
     with patch("dre.service.repo.get_analysis_request", return_value=analysis_request), patch(
         "dre.service.repo.get_drawing", side_effect=lambda did: drawings[did]
     ) as mock_get_drawing, patch(
-        "dre.service.repo.download_drawing_image",
-        side_effect=lambda d, dest_dir, basename: dest_dir / f"{basename}.png",
+        "dre.service.repo.download_drawing_image_and_raw_bytes",
+        side_effect=lambda d, dest_dir, basename: (dest_dir / f"{basename}.png", b"not-a-pdf"),
     ), patch(
         "dre.service.build_pipeline", return_value=SimpleNamespace(run=_fake_pipeline_run)
     ):
@@ -158,8 +177,8 @@ def test_real_write_deletes_prior_flagged_changes_before_writing_new_ones():
     with patch("dre.service.repo.get_analysis_request", return_value=analysis_request), patch(
         "dre.service.repo.get_drawing", side_effect=lambda did: drawings[did]
     ), patch(
-        "dre.service.repo.download_drawing_image",
-        side_effect=lambda d, dest_dir, basename: dest_dir / f"{basename}.png",
+        "dre.service.repo.download_drawing_image_and_raw_bytes",
+        side_effect=lambda d, dest_dir, basename: (dest_dir / f"{basename}.png", b"not-a-pdf"),
     ), patch(
         "dre.service.build_pipeline", return_value=SimpleNamespace(run=_fake_pipeline_run)
     ), patch(
@@ -170,6 +189,8 @@ def test_real_write_deletes_prior_flagged_changes_before_writing_new_ones():
         "dre.service.repo.delete_flagged_changes_for_analysis_request"
     ) as mock_delete, patch(
         "dre.service.repo.log_tiling_trigger_diagnostics"
+    ), patch(
+        "dre.service.repo.set_tiling_path"
     ):
         result = service.analyze_request("ar6", dry_run=False)
 
@@ -196,8 +217,8 @@ def test_real_write_logs_tiling_trigger_diagnostics():
     with patch("dre.service.repo.get_analysis_request", return_value=analysis_request), patch(
         "dre.service.repo.get_drawing", side_effect=lambda did: drawings[did]
     ), patch(
-        "dre.service.repo.download_drawing_image",
-        side_effect=lambda d, dest_dir, basename: dest_dir / f"{basename}.png",
+        "dre.service.repo.download_drawing_image_and_raw_bytes",
+        side_effect=lambda d, dest_dir, basename: (dest_dir / f"{basename}.png", b"not-a-pdf"),
     ), patch(
         "dre.service.build_pipeline", return_value=SimpleNamespace(run=_fake_pipeline_run)
     ), patch(
@@ -208,7 +229,9 @@ def test_real_write_logs_tiling_trigger_diagnostics():
         "dre.service.repo.delete_flagged_changes_for_analysis_request"
     ), patch(
         "dre.service.repo.log_tiling_trigger_diagnostics"
-    ) as mock_log:
+    ) as mock_log, patch(
+        "dre.service.repo.set_tiling_path"
+    ):
         service.analyze_request("ar8", dry_run=False)
 
     mock_log.assert_called_once()
@@ -238,8 +261,8 @@ def test_tiling_trigger_diagnostics_failure_never_breaks_the_real_write():
     with patch("dre.service.repo.get_analysis_request", return_value=analysis_request), patch(
         "dre.service.repo.get_drawing", side_effect=lambda did: drawings[did]
     ), patch(
-        "dre.service.repo.download_drawing_image",
-        side_effect=lambda d, dest_dir, basename: dest_dir / f"{basename}.png",
+        "dre.service.repo.download_drawing_image_and_raw_bytes",
+        side_effect=lambda d, dest_dir, basename: (dest_dir / f"{basename}.png", b"not-a-pdf"),
     ), patch(
         "dre.service.build_pipeline", return_value=SimpleNamespace(run=_fake_pipeline_run)
     ), patch(
@@ -251,6 +274,8 @@ def test_tiling_trigger_diagnostics_failure_never_breaks_the_real_write():
     ), patch(
         "dre.service.repo.log_tiling_trigger_diagnostics",
         side_effect=Exception("column does not exist"),
+    ), patch(
+        "dre.service.repo.set_tiling_path"
     ):
         result = service.analyze_request("ar10", dry_run=False)
 
@@ -272,8 +297,8 @@ def test_dry_run_never_logs_tiling_trigger_diagnostics():
     with patch("dre.service.repo.get_analysis_request", return_value=analysis_request), patch(
         "dre.service.repo.get_drawing", side_effect=lambda did: drawings[did]
     ), patch(
-        "dre.service.repo.download_drawing_image",
-        side_effect=lambda d, dest_dir, basename: dest_dir / f"{basename}.png",
+        "dre.service.repo.download_drawing_image_and_raw_bytes",
+        side_effect=lambda d, dest_dir, basename: (dest_dir / f"{basename}.png", b"not-a-pdf"),
     ), patch(
         "dre.service.build_pipeline", return_value=SimpleNamespace(run=_fake_pipeline_run)
     ), patch(
@@ -298,8 +323,8 @@ def test_dry_run_never_deletes_prior_flagged_changes():
     with patch("dre.service.repo.get_analysis_request", return_value=analysis_request), patch(
         "dre.service.repo.get_drawing", side_effect=lambda did: drawings[did]
     ), patch(
-        "dre.service.repo.download_drawing_image",
-        side_effect=lambda d, dest_dir, basename: dest_dir / f"{basename}.png",
+        "dre.service.repo.download_drawing_image_and_raw_bytes",
+        side_effect=lambda d, dest_dir, basename: (dest_dir / f"{basename}.png", b"not-a-pdf"),
     ), patch(
         "dre.service.build_pipeline", return_value=SimpleNamespace(run=_fake_pipeline_run)
     ), patch(
