@@ -134,6 +134,119 @@ rejected outright once a request is already analyzed, or stay something the
 caller (Lovable) is responsible for avoiding is a product decision, not
 answered here.
 
+## `reason` can fabricate a confident causal claim while the real cause sits orphaned nearby, unlinked
+
+**What happened**: a real production re-run of E-201 (two-image mode)
+produced a `panel_relocation` event whose bundle included circuit C3's
+reroute, with `root_cause_summary`/the bundled item's own text stating C3
+was rerouted *"because"* the panel moved. Separately, in the same run, an
+unrelated new element (a short unlabeled vertical line near Office B)
+came back as its own honestly-hedged `identity_unresolved` event — "an
+item on this sheet is flagged for revision, but its identity and purpose
+cannot be confirmed." The two were never connected. A second run against
+the identical sheet pair got it right: `detect` resolved the same visual
+element as a wall/partition, and `reason` correctly bundled C3's reroute
+under a *separate* event caused by the new wall, exactly matching the
+original validated ground truth for this sheet (the answer key
+specifically constructed this case to test that a shared circuit doesn't
+get its cause conflated with an unrelated nearby event).
+
+**Where the fabrication actually starts, confirmed against the raw
+trace, not assumed**: the causal claim ("replaced by a new home run path
+from the relocated panel") is already present in `classify`'s output for
+that item, before `reason` ever runs — `classify.md` never explicitly
+forbids asserting a specific external cause, even though determining root
+cause is architecturally `reason`'s job. `reason` then fails to catch or
+override it. That second failure is the more surprising one: `reason.md`
+already contains guidance for *this exact scenario*, using the same
+circuit-letter pattern as the real bug — *"If a panel relocation forces
+circuits C1, C2, and C4 to reroute, but C3 reroutes for a different
+reason — a new wall in its path — C3 does not belong in the panel's
+bundle just because it's also a reroute on the same panel."* The model
+was given this near-verbatim and still violated it once under real
+conditions. Worth keeping that reinforcement — it's cheap — but not
+trusting it as sufficient alone, having now watched it fail once despite
+being about as explicit as prompt guidance gets.
+
+**Why this isn't enforceable in code the same way `identity_unresolved`
+is** (see `identity_resolution.py`): that mechanism works because
+`identity_unresolved` is a boolean the model already self-reports on
+`ClassifiedChange` — code only has to guarantee the flag survives
+propagation, never re-deriving or verifying it. There's no equivalent
+self-reported signal for "this bundling is correct." Mechanically
+verifying the *causal claim itself* would mean independently redoing the
+same visual/electrical judgment the model already got wrong — not
+something code can do cheaply or reliably. Checked whether the structured
+data offers a proxy anyway: it doesn't, for a specific reason — the
+orphaned item's `involved_entities` is empty precisely *because* its
+identity is unresolved, which is exactly the signal that would be needed
+to mechanically link it back to the wrongly-attributed item. Spatial
+(bounding-box) cross-referencing was also considered and rejected — this
+project's own tiling work independently found detect's self-reported
+regions unreliable even across independently-agreeing runs (see
+`docs/tiled_analysis_findings.md` §3c), so trusting them here would repeat
+a mistake already paid for elsewhere.
+
+**What's buildable instead: a structural co-occurrence signal into
+confidence scoring and describe's output, not a fix at `reason` itself.**
+Not a guarantee the causal claim is correct — a real, honestly-scoped
+signal that a run's causal claims are less trustworthy than usual, always
+true whenever the shape recurs:
+
+- **The signal**: within one pipeline run, does `ctx.change_events`
+  contain (a) at least one event with `identity_unresolved: true`, and
+  (b) at least one *other* event, not itself unresolved, whose `category`
+  is one that asserts a specific external cause for a device/circuit —
+  `panel_relocation`, `device_relocation`, `circuit_reroute`,
+  `device_modified` (deliberately excludes `device_added`/
+  `device_removed`, whose own cause is normally the addition/removal
+  itself, and excludes `schedule_label_edit`/`annotation_only`/
+  `noise_non_material`, which don't assert this kind of causal narrative).
+  Both facts are already present on `ChangeEvent` — no new detection or
+  classification work needed, purely a property of what `reason` already
+  produced for this run.
+- **Confidence discount**: extend `apply_mode_ceiling` (`confidence.py`)
+  with a new ceiling on `ambiguity_factor`, applied to any event where the
+  signal fires — mirroring exactly how `_SINGLE_SHEET_AMBIGUITY_CEILING`
+  and `_UNRESOLVED_IDENTITY_AMBIGUITY_CAP` already work, just a third,
+  weaker case. Proposed starting value: **0.75** — chosen specifically to
+  sit just below `_CLEAR_AMBIGUITY_CUTOFF` (0.93), so a flagged event
+  can't reach the "textbook clear, 0.90+" scoring band regardless of how
+  clean the rest of its evidence looks (E-201's bad `evt1` scored 0.8525
+  — in that band — specifically because its *other* bundled items really
+  were clear), while staying well above `_UNRESOLVED_IDENTITY_AMBIGUITY_CAP`
+  (0.3): this signal is real but much weaker evidence than "this specific
+  item's own identity is unresolved," so it shouldn't be punished nearly
+  as hard. Requires threading the full `ctx.change_events` list (or a
+  precomputed boolean) into the per-event confidence call, which currently
+  only sees one event at a time — a real but small structural change.
+  **0.75 is a starting point, not a calibrated number** — same posture as
+  every other constant introduced this way in this codebase (DPI,
+  `MIN_SHARED_TOKENS`): don't lock it in off one confirmed real instance.
+- **User-facing caveat**: append (never replace — this isn't a certainty
+  the way `identity_unresolved` is) a fixed, code-authored sentence to the
+  flagged event's `downstream_implications`, in the same post-`reason`
+  pass as `enforce_identity_unresolved` — e.g. *"This sheet also has a
+  separate, unidentified flagged item; if that item is actually related to
+  this change, the stated cause here may need to be revisited."* Flows
+  into `impact_note` for free through `describe.py`'s existing
+  `_build_impact_note`, which already assembles `impact_note`
+  deterministically from `downstream_implications` — no `describe.py`
+  change needed.
+- **Passive diagnostic logging, before trusting the number**: log whether
+  the signal fired per run (and for how many events), the same pattern
+  established for §3a's tiling trigger and §3c's merge-threshold
+  diagnostics — real accumulating evidence to tune the 0.75 ceiling
+  against later, instead of guessing once and leaving it. Natural home:
+  alongside the existing `ambiguity_factor_raw` pattern on
+  `ConfidenceScore`, or in `pipeline_change_events.confidence_rationale`,
+  which already stores this kind of per-event reasoning detail.
+
+**Not yet built** — sketched and reviewed, deliberately not implemented
+before deciding whether to prioritize it against the tiling work still in
+flight (§3f parallel execution, §3e's duration hint). A real, scoped,
+buildable gap, not an open question.
+
 ## One-off: transient `classify` malformed tool-call failure
 
 A single E-101.3 re-run hit `call_structured`'s "malformed payload 3 times
