@@ -30,7 +30,7 @@ from dre.pipeline.tile_merge import (
     filter_detections_by_cloud_proximity,
     group_merge_candidates,
 )
-from dre.pipeline.tile_tuning import run_detect_single_on_grid
+from dre.pipeline.tile_tuning import DEFAULT_MAX_PARALLEL_TILE_WORKERS, run_detect_single_on_grid
 from dre.tiling_trigger import compute_tiling_trigger_diagnostics
 
 TILED_DETECT_DPI = 150.0
@@ -222,16 +222,23 @@ def merge_tiled_detections(
 
 
 def run_tiled_detect_and_merge(
-    pdf_bytes: bytes, *, dpi: float = TILED_DETECT_DPI
+    pdf_bytes: bytes,
+    *,
+    dpi: float = TILED_DETECT_DPI,
+    max_workers: int = DEFAULT_MAX_PARALLEL_TILE_WORKERS,
 ) -> tuple[SingleSheetDetectResult, VolumeCapDiagnostics]:
     """The real production entry point: full sheet PDF bytes in, one merged
     `SingleSheetDetectResult` out — ready to replace
-    `ctx.detect_single_result`. Sequential per-tile calls (§3f's parallel
-    execution is a separate, not-yet-built piece — see
-    docs/tiled_analysis_findings.md §5's end-to-end status note)."""
+    `ctx.detect_single_result`. Per-tile calls run in parallel, bounded by
+    `max_workers` (docs/tiled_analysis_findings.md §3f) — see
+    `run_detect_single_on_grid` for why threads, not `asyncio`."""
     sheet_width_in, sheet_height_in = sheet_dimensions_in_inches(pdf_bytes)
     grid_result = run_detect_single_on_grid(
-        pdf_bytes, sheet_width_in=sheet_width_in, sheet_height_in=sheet_height_in, dpi=dpi
+        pdf_bytes,
+        sheet_width_in=sheet_width_in,
+        sheet_height_in=sheet_height_in,
+        dpi=dpi,
+        max_workers=max_workers,
     )
     return merge_tiled_detections(grid_result.tiled_detections, grid_result.extracted_tables)
 

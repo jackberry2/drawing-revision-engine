@@ -12,7 +12,9 @@ See `dre tile-detect --help` (single tile) and `dre tile-detect-grid
 
 from __future__ import annotations
 
+import functools
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from dataclasses import dataclass, field
@@ -23,6 +25,13 @@ from dre.pipeline.base import PipelineContext
 from dre.pipeline.detect_single import DetectSingleStep
 from dre.pipeline.tile_merge import TiledDetection
 from dre.tiling import DEFAULT_OVERLAP_FRACTION, DEFAULT_TILE_EDGE_PX, TileSpec, compute_tile_grid
+
+# docs/tiled_analysis_findings.md §3f: bounded, not all 20-70 tiles at once —
+# both to be a reasonable API citizen (even though the real rate limits
+# checked there aren't a binding constraint at this scale) and because
+# concurrent-connection behavior on a small Render instance hasn't been
+# tested, not confirmed safe by assumption.
+DEFAULT_MAX_PARALLEL_TILE_WORKERS = 6
 
 
 @dataclass(frozen=True)
@@ -56,16 +65,30 @@ def run_detect_single_on_grid(
     dpi: float,
     tile_edge_px: int = DEFAULT_TILE_EDGE_PX,
     overlap_fraction: float = DEFAULT_OVERLAP_FRACTION,
+    max_workers: int = DEFAULT_MAX_PARALLEL_TILE_WORKERS,
 ) -> GridDetectResult:
-    """Runs `run_detect_single_on_tile` against every tile in the grid,
-    sequentially — real API cost scales directly with tile count (§4), so
-    this is for deliberate harness/calibration use, not something to call
-    casually or automatically. Real accumulation path for §5's merge-
+    """Runs `run_detect_single_on_tile` against every tile in the grid, in
+    parallel via a bounded `ThreadPoolExecutor` (docs/tiled_analysis_
+    findings.md §3f) — real API cost scales directly with tile count either
+    way (§4; parallel changes wall-clock latency only, not cost or call
+    count), so this is still for deliberate harness/calibration use, not
+    something to call casually. Real accumulation path for §5's merge-
     threshold calibration data (§3c): there's no production tiled flow to
     passively log from yet, but this makes it possible to gather more real
     known-good/known-miss data points today, ahead of that integration
     existing. Also the function the real production tiled branch
     (`dre.pipeline.tiled_detect`) calls — this is no longer harness-only.
+
+    Threads, not `asyncio`: `anthropic.Anthropic`'s sync client (used by
+    every stage via `call_structured`) releases the GIL during its network
+    I/O wait like any blocking call, so a plain `ThreadPoolExecutor` gets
+    real concurrency here without an async rewrite of the whole call chain.
+    `executor.map` preserves input order, so results line up with `tiles`
+    positionally without extra bookkeeping — and propagates the first
+    exception raised by any tile on iteration, same fail-the-whole-attempt
+    semantics the previous sequential loop already had (a tile failure
+    still surfaces to `decide_and_apply_tiling`'s existing fallback, not a
+    new partial-failure mode to design around).
 
     `tile_edge_px`/`overlap_fraction` are passed straight through to
     `compute_tile_grid` — kept overridable here for the same reason
@@ -78,10 +101,13 @@ def run_detect_single_on_grid(
         tile_edge_px=tile_edge_px,
         overlap_fraction=overlap_fraction,
     )
+    worker = functools.partial(run_detect_single_on_tile, pdf_bytes, dpi=dpi)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        tile_results = list(executor.map(worker, tiles))
+
     tiled_detections: list[TiledDetection] = []
     extracted_tables: list[ExtractedTable] = []
-    for tile in tiles:
-        result = run_detect_single_on_tile(pdf_bytes, tile, dpi=dpi)
+    for tile, result in zip(tiles, tile_results):
         for detection in result.detections:
             tiled_detections.append(
                 TiledDetection(tile_row=tile.row, tile_col=tile.col, detection=detection)

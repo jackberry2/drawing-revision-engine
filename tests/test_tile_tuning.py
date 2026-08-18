@@ -2,6 +2,9 @@
 DetectSingleStep), with the actual Claude call mocked so this doesn't cost
 real API credits on every test run."""
 
+import threading
+import time
+import uuid
 from unittest.mock import patch
 
 from dre.models.schemas import SingleSheetDetection, SingleSheetDetectResult
@@ -56,14 +59,21 @@ def test_run_detect_single_on_grid_tags_each_tiles_detections_with_its_own_row_c
     )
     assert len(tiles) > 1  # sanity check this test actually exercises multiple tiles
 
+    call_lock = threading.Lock()
     call_count = {"n": 0}
 
     def fake_execute(ctx):
-        call_count["n"] += 1
+        # This now runs concurrently across threads (§3f) - a plain
+        # dict[key] += 1 is not guaranteed atomic under real thread
+        # interleaving, and each call needs a genuinely unique id
+        # (uuid4, not a shared counter) rather than relying on call
+        # ordering that parallel execution no longer guarantees.
+        with call_lock:
+            call_count["n"] += 1
         return SingleSheetDetectResult(
             detections=[
                 SingleSheetDetection(
-                    id=f"det-{call_count['n']}",
+                    id=f"det-{uuid.uuid4()}",
                     flagged_by="revision_cloud",
                     geometry_description="fake",
                 )
@@ -86,3 +96,88 @@ def test_run_detect_single_on_grid_tags_each_tiles_detections_with_its_own_row_c
     expected_tile_coords = {(t.row, t.col) for t in tiles}
     assert seen_tile_coords == expected_tile_coords
     assert grid_result.extracted_tables == []
+
+
+def test_run_detect_single_on_grid_actually_runs_tiles_concurrently():
+    """§3f's whole point: real wall-clock reduction, not just correctness.
+    Proven two ways: (1) more than one call is ever in-flight at the same
+    time (direct evidence of concurrency, not inferred from timing alone),
+    and (2) total wall time is far less than sequential would take."""
+    import fitz
+
+    doc = fitz.open()
+    doc.new_page(width=800, height=600)
+    pdf_bytes = doc.tobytes()
+    doc.close()
+
+    tiles = compute_tile_grid(
+        sheet_width_in=800 / 72, sheet_height_in=600 / 72, target_dpi=72, tile_edge_px=300
+    )
+    assert len(tiles) >= 6  # enough tiles that max_workers actually gets exercised
+
+    concurrency_lock = threading.Lock()
+    state = {"in_flight": 0, "max_in_flight": 0}
+    per_call_delay_s = 0.2
+
+    def fake_execute(ctx):
+        with concurrency_lock:
+            state["in_flight"] += 1
+            state["max_in_flight"] = max(state["max_in_flight"], state["in_flight"])
+        time.sleep(per_call_delay_s)
+        with concurrency_lock:
+            state["in_flight"] -= 1
+        return SingleSheetDetectResult(detections=[], extracted_tables=[])
+
+    with patch("dre.pipeline.tile_tuning.DetectSingleStep.execute", side_effect=fake_execute):
+        start = time.perf_counter()
+        run_detect_single_on_grid(
+            pdf_bytes,
+            sheet_width_in=800 / 72,
+            sheet_height_in=600 / 72,
+            dpi=72,
+            tile_edge_px=300,
+            max_workers=6,
+        )
+        elapsed = time.perf_counter() - start
+
+    assert state["max_in_flight"] > 1  # direct evidence: calls actually overlapped in time
+    sequential_would_take = len(tiles) * per_call_delay_s
+    assert elapsed < sequential_would_take * 0.6  # real wall-clock reduction, not marginal
+
+
+def test_max_workers_bounds_concurrency():
+    import fitz
+
+    doc = fitz.open()
+    doc.new_page(width=800, height=600)
+    pdf_bytes = doc.tobytes()
+    doc.close()
+
+    tiles = compute_tile_grid(
+        sheet_width_in=800 / 72, sheet_height_in=600 / 72, target_dpi=72, tile_edge_px=300
+    )
+    assert len(tiles) >= 6
+
+    concurrency_lock = threading.Lock()
+    state = {"in_flight": 0, "max_in_flight": 0}
+
+    def fake_execute(ctx):
+        with concurrency_lock:
+            state["in_flight"] += 1
+            state["max_in_flight"] = max(state["max_in_flight"], state["in_flight"])
+        time.sleep(0.05)
+        with concurrency_lock:
+            state["in_flight"] -= 1
+        return SingleSheetDetectResult(detections=[], extracted_tables=[])
+
+    with patch("dre.pipeline.tile_tuning.DetectSingleStep.execute", side_effect=fake_execute):
+        run_detect_single_on_grid(
+            pdf_bytes,
+            sheet_width_in=800 / 72,
+            sheet_height_in=600 / 72,
+            dpi=72,
+            tile_edge_px=300,
+            max_workers=2,
+        )
+
+    assert state["max_in_flight"] <= 2  # never exceeds the bound, even with more tiles available
