@@ -2,7 +2,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from dre import api, config
+from dre import api, config, credits
 
 
 def _client() -> TestClient:
@@ -36,6 +36,17 @@ def test_analyze_accepts_correct_key_and_reaches_service(monkeypatch):
     assert resp.status_code == 200
     assert resp.json() == {"ok": True}
     mock_analyze.assert_called_once_with("some-id", dry_run=False)
+
+
+def test_analyze_returns_402_when_out_of_credits(monkeypatch):
+    monkeypatch.setattr(config, "DRE_API_KEY", "correct-key")
+    with patch(
+        "dre.api.service.analyze_request",
+        side_effect=credits.InsufficientCreditsError("user-1", 0),
+    ):
+        resp = _client().post("/analyze/some-id", headers={"X-API-Key": "correct-key"})
+    assert resp.status_code == 402
+    assert "user-1" in resp.json()["detail"]
 
 
 def test_health_does_not_require_api_key(monkeypatch):
@@ -86,6 +97,22 @@ def test_analyze_single_accepts_correct_key_and_reaches_service(monkeypatch):
     assert resp.status_code == 200
     assert resp.json() == {"ok": True}
     mock_analyze.assert_called_once_with("some-id", dry_run=False)
+
+
+def test_analyze_single_returns_402_when_out_of_credits(monkeypatch):
+    monkeypatch.setattr(config, "DRE_API_KEY", "correct-key")
+    with patch(
+        "dre.api.repo.get_analysis_request",
+        return_value={"id": "some-id", "mode": "single_sheet"},
+    ), patch(
+        "dre.api.service.analyze_request",
+        side_effect=credits.InsufficientCreditsError("user-1", 0),
+    ):
+        resp = _client().post(
+            "/analyze-single/some-id", headers={"X-API-Key": "correct-key"}
+        )
+    assert resp.status_code == 402
+    assert "user-1" in resp.json()["detail"]
 
 
 def test_duration_estimate_rejects_missing_key(monkeypatch):

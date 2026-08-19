@@ -24,6 +24,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
+from dre import credits
 from dre.mapping import to_change_type, to_confidence_percentage, to_confidence_tier
 from dre.pipeline.base import NullStepLogger, PipelineContext
 from dre.pipeline.runner import build_pipeline
@@ -76,6 +77,20 @@ def estimate_duration(analysis_request_id: str) -> dict[str, Any]:
 def analyze_request(analysis_request_id: str, *, dry_run: bool = False) -> dict[str, Any]:
     analysis_request = repo.get_analysis_request(analysis_request_id)
     mode = analysis_request.get("mode") or "two_image"
+
+    # Credits: checked before any real Claude call (dry_run included — a
+    # preview run spends the same real API money as a committed one, see
+    # this function's own docstring), so a request that can't be paid for
+    # never spends anything. See dre.credits for the balance/allotment
+    # logic and why this only checks "any credits at all", not the
+    # specific 1-vs-5 cost of this particular analysis.
+    user_id: Optional[str] = analysis_request.get("requested_by")
+    if not user_id:
+        raise ValueError(
+            f"analysis_request {analysis_request_id} has no requested_by set — "
+            "can't check or record credit usage against it"
+        )
+    credits.check_sufficient_credits(user_id)
 
     old_drawing_id: Optional[str] = analysis_request.get("old_drawing_id")
     new_drawing_id: Optional[str] = analysis_request.get("new_drawing_id")
@@ -270,6 +285,17 @@ def analyze_request(analysis_request_id: str, *, dry_run: bool = False) -> dict[
 
     repo.set_run_status(run_id, "completed")
     repo.set_analysis_status(analysis_request_id, "in_review")
+
+    # A failure here must never corrupt a real, already-successful analysis
+    # (already written above) — same fail-safe principle as the
+    # tiling_trigger_diagnostics logging earlier in this function. Billing
+    # reconciliation is a separate concern from the analysis itself.
+    try:
+        credits.record_usage(
+            user_id=user_id, analysis_request_id=analysis_request_id, tiling_path=tiling_path
+        )
+    except Exception:
+        pass
 
     return {
         "run_id": run_id,

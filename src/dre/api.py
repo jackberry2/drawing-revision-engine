@@ -12,7 +12,7 @@ import secrets
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from dre import config, service
+from dre import config, credits, service
 from dre.supa import repository as repo
 
 app = FastAPI(title="Drawing Revision Engine")
@@ -53,6 +53,8 @@ def analyze(analysis_request_id: str, dry_run: bool = False) -> dict:
     """
     try:
         return service.analyze_request(analysis_request_id, dry_run=dry_run)
+    except credits.InsufficientCreditsError as exc:
+        raise HTTPException(status_code=402, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - surfaced to the caller as a 500 with detail
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -88,6 +90,8 @@ def analyze_single(analysis_request_id: str, dry_run: bool = False) -> dict:
 
     try:
         return service.analyze_request(analysis_request_id, dry_run=dry_run)
+    except credits.InsufficientCreditsError as exc:
+        raise HTTPException(status_code=402, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - surfaced to the caller as a 500 with detail
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 

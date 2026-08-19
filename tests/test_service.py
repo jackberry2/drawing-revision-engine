@@ -10,8 +10,26 @@ from unittest.mock import patch
 
 import pytest
 
-from dre import service
+from dre import credits, service
 from dre.models.schemas import DetectResult, ExtractedTable, SingleSheetDetectResult
+
+
+@pytest.fixture(autouse=True)
+def _default_credits_noop():
+    """Every analysis_request fixture in this file now carries a real
+    requested_by (see dre.credits), and every real (non-dry-run) write goes
+    through credits.record_usage. Default every test to "has credits, and
+    real credit_usage writes are no-ops" so the many tests that are
+    actually about drawing-id resolution or tiling logging, not credits,
+    don't all need their own patch for this — and so a forgotten patch
+    fails loud (AssertionError from a real Supabase call with no
+    credentials/FK match) rather than silently hitting the real network.
+    Tests that exercise credit-check/deduction behavior itself override
+    these within their own `with` block."""
+    with patch("dre.service.credits.check_sufficient_credits"), patch(
+        "dre.service.credits.record_usage"
+    ):
+        yield
 
 
 def _fake_pipeline_run(ctx, *, on_after_detect=None):
@@ -59,6 +77,7 @@ def test_single_sheet_uses_new_drawing_id_when_old_is_null():
         "new_drawing_id": "d-new",
         "project_id": "p1",
         "sheet_number": "E-501",
+        "requested_by": "user-1",
     }
     drawings = {"d-new": {"id": "d-new", "file_path": "sheet.png"}}
     with patch("dre.service.repo.get_analysis_request", return_value=analysis_request), patch(
@@ -84,6 +103,7 @@ def test_single_sheet_uses_old_drawing_id_when_set():
         "new_drawing_id": None,
         "project_id": "p1",
         "sheet_number": "E-501",
+        "requested_by": "user-1",
     }
     drawings = {"d-old": {"id": "d-old", "file_path": "sheet.png"}}
     with patch("dre.service.repo.get_analysis_request", return_value=analysis_request), patch(
@@ -108,6 +128,7 @@ def test_single_sheet_raises_clearly_when_both_drawing_ids_null():
         "new_drawing_id": None,
         "project_id": "p1",
         "sheet_number": "E-501",
+        "requested_by": "user-1",
     }
     with patch("dre.service.repo.get_analysis_request", return_value=analysis_request):
         with pytest.raises(ValueError, match="neither old_drawing_id nor new_drawing_id"):
@@ -122,6 +143,7 @@ def test_two_image_mode_raises_clearly_when_old_drawing_id_missing():
         "new_drawing_id": "d-new",
         "project_id": "p1",
         "sheet_number": "E-501",
+        "requested_by": "user-1",
     }
     with patch("dre.service.repo.get_analysis_request", return_value=analysis_request):
         with pytest.raises(ValueError, match="old_drawing_id is not set"):
@@ -136,6 +158,7 @@ def test_two_image_mode_still_loads_both_drawings_normally():
         "new_drawing_id": "d-new",
         "project_id": "p1",
         "sheet_number": "E-501",
+        "requested_by": "user-1",
     }
     drawings = {
         "d-old": {"id": "d-old", "file_path": "old.png"},
@@ -171,6 +194,7 @@ def test_real_write_deletes_prior_flagged_changes_before_writing_new_ones():
         "new_drawing_id": None,
         "project_id": "p1",
         "sheet_number": "E-501",
+        "requested_by": "user-1",
     }
     drawings = {"d-old": {"id": "d-old", "file_path": "sheet.png"}}
 
@@ -211,6 +235,7 @@ def test_real_write_logs_tiling_trigger_diagnostics():
         "new_drawing_id": None,
         "project_id": "p1",
         "sheet_number": "E-501",
+        "requested_by": "user-1",
     }
     drawings = {"d-old": {"id": "d-old", "file_path": "sheet.png"}}
 
@@ -255,6 +280,7 @@ def test_tiling_trigger_diagnostics_failure_never_breaks_the_real_write():
         "new_drawing_id": None,
         "project_id": "p1",
         "sheet_number": "E-501",
+        "requested_by": "user-1",
     }
     drawings = {"d-old": {"id": "d-old", "file_path": "sheet.png"}}
 
@@ -291,6 +317,7 @@ def test_dry_run_never_logs_tiling_trigger_diagnostics():
         "new_drawing_id": None,
         "project_id": "p1",
         "sheet_number": "E-501",
+        "requested_by": "user-1",
     }
     drawings = {"d-old": {"id": "d-old", "file_path": "sheet.png"}}
 
@@ -317,6 +344,7 @@ def test_dry_run_never_deletes_prior_flagged_changes():
         "new_drawing_id": None,
         "project_id": "p1",
         "sheet_number": "E-501",
+        "requested_by": "user-1",
     }
     drawings = {"d-old": {"id": "d-old", "file_path": "sheet.png"}}
 
@@ -385,3 +413,188 @@ def test_estimate_duration_uses_new_drawing_id_when_old_is_null_and_makes_no_api
     assert result["tiling_likely"] is False  # not a real PDF -> single-pass estimate
     assert "estimated_duration_seconds" in result
     assert "reason" in result
+
+
+# ---- credits (Stripe-backed subscriptions / credit_usage) ---------------
+
+
+def test_analyze_request_raises_clearly_when_requested_by_missing():
+    analysis_request = {
+        "id": "ar14",
+        "mode": "single_sheet",
+        "old_drawing_id": "d-old",
+        "new_drawing_id": None,
+        "project_id": "p1",
+        "sheet_number": "E-501",
+        "requested_by": None,
+    }
+    with patch("dre.service.repo.get_analysis_request", return_value=analysis_request):
+        with pytest.raises(ValueError, match="requested_by"):
+            service.analyze_request("ar14", dry_run=True)
+
+
+def test_analyze_request_blocks_before_any_drawing_or_pipeline_work_when_out_of_credits():
+    """Point 2: a request that can't be paid for must never reach a real
+    Claude call — checked here by confirming get_drawing/build_pipeline are
+    never even invoked once check_sufficient_credits raises."""
+    analysis_request = {
+        "id": "ar15",
+        "mode": "single_sheet",
+        "old_drawing_id": "d-old",
+        "new_drawing_id": None,
+        "project_id": "p1",
+        "sheet_number": "E-501",
+        "requested_by": "user-1",
+    }
+    with patch(
+        "dre.service.repo.get_analysis_request", return_value=analysis_request
+    ), patch(
+        "dre.service.credits.check_sufficient_credits",
+        side_effect=credits.InsufficientCreditsError("user-1", 0),
+    ), patch("dre.service.repo.get_drawing") as mock_get_drawing, patch(
+        "dre.service.build_pipeline"
+    ) as mock_build_pipeline:
+        with pytest.raises(credits.InsufficientCreditsError):
+            service.analyze_request("ar15", dry_run=True)
+
+    mock_get_drawing.assert_not_called()
+    mock_build_pipeline.assert_not_called()
+
+
+def test_dry_run_is_still_checked_for_credits():
+    """A dry_run still makes real, billed Claude API calls (see this
+    function's own docstring) — it must be blocked the same as a real run
+    when the user can't pay for it."""
+    analysis_request = {
+        "id": "ar16",
+        "mode": "single_sheet",
+        "old_drawing_id": "d-old",
+        "new_drawing_id": None,
+        "project_id": "p1",
+        "sheet_number": "E-501",
+        "requested_by": "user-1",
+    }
+    with patch(
+        "dre.service.repo.get_analysis_request", return_value=analysis_request
+    ), patch("dre.service.credits.check_sufficient_credits") as mock_check:
+        with patch(
+            "dre.service.repo.get_drawing",
+            return_value={"id": "d-old", "file_path": "sheet.png"},
+        ), patch(
+            "dre.service.repo.download_drawing_image_and_raw_bytes",
+            side_effect=lambda d, dest_dir, basename: (dest_dir / f"{basename}.png", b"not-a-pdf"),
+        ), patch(
+            "dre.service.build_pipeline", return_value=SimpleNamespace(run=_fake_pipeline_run)
+        ):
+            service.analyze_request("ar16", dry_run=True)
+
+    mock_check.assert_called_once_with("user-1")
+
+
+def test_real_write_records_credit_usage_with_tiling_path_derived_cost():
+    """two_image mode always resolves tiling_path='not_applicable' (no
+    tiling branch exists for it) — a deterministic way to exercise the
+    real deduction call without faking a tiling outcome."""
+    analysis_request = {
+        "id": "ar17",
+        "mode": "two_image",
+        "old_drawing_id": "d-old",
+        "new_drawing_id": "d-new",
+        "project_id": "p1",
+        "sheet_number": "E-501",
+        "requested_by": "user-1",
+    }
+    drawings = {
+        "d-old": {"id": "d-old", "file_path": "old.png"},
+        "d-new": {"id": "d-new", "file_path": "new.png"},
+    }
+
+    with patch("dre.service.repo.get_analysis_request", return_value=analysis_request), patch(
+        "dre.service.repo.get_drawing", side_effect=lambda did: drawings[did]
+    ), patch(
+        "dre.service.repo.download_drawing_image",
+        side_effect=lambda d, dest_dir, basename: dest_dir / f"{basename}.png",
+    ), patch(
+        "dre.service.build_pipeline", return_value=SimpleNamespace(run=_fake_pipeline_run)
+    ), patch(
+        "dre.service.repo.create_pipeline_run", return_value="run-1"
+    ), patch("dre.service.repo.set_run_status"), patch(
+        "dre.service.repo.set_analysis_status"
+    ), patch(
+        "dre.service.repo.delete_flagged_changes_for_analysis_request"
+    ), patch(
+        "dre.service.repo.log_tiling_trigger_diagnostics"
+    ), patch(
+        "dre.service.repo.set_tiling_path"
+    ), patch("dre.service.credits.record_usage") as mock_record:
+        service.analyze_request("ar17", dry_run=False)
+
+    mock_record.assert_called_once_with(
+        user_id="user-1", analysis_request_id="ar17", tiling_path="not_applicable"
+    )
+
+
+def test_dry_run_never_records_credit_usage():
+    analysis_request = {
+        "id": "ar18",
+        "mode": "single_sheet",
+        "old_drawing_id": "d-old",
+        "new_drawing_id": None,
+        "project_id": "p1",
+        "sheet_number": "E-501",
+        "requested_by": "user-1",
+    }
+    drawings = {"d-old": {"id": "d-old", "file_path": "sheet.png"}}
+
+    with patch("dre.service.repo.get_analysis_request", return_value=analysis_request), patch(
+        "dre.service.repo.get_drawing", side_effect=lambda did: drawings[did]
+    ), patch(
+        "dre.service.repo.download_drawing_image_and_raw_bytes",
+        side_effect=lambda d, dest_dir, basename: (dest_dir / f"{basename}.png", b"not-a-pdf"),
+    ), patch(
+        "dre.service.build_pipeline", return_value=SimpleNamespace(run=_fake_pipeline_run)
+    ), patch("dre.service.credits.record_usage") as mock_record:
+        service.analyze_request("ar18", dry_run=True)
+
+    mock_record.assert_not_called()
+
+
+def test_credit_usage_recording_failure_never_breaks_the_real_write():
+    """Same fail-safe principle as the tiling_trigger_diagnostics failure
+    test above (point 5): billing reconciliation must never corrupt an
+    already-successful real analysis."""
+    analysis_request = {
+        "id": "ar19",
+        "mode": "single_sheet",
+        "old_drawing_id": "d-old",
+        "new_drawing_id": None,
+        "project_id": "p1",
+        "sheet_number": "E-501",
+        "requested_by": "user-1",
+    }
+    drawings = {"d-old": {"id": "d-old", "file_path": "sheet.png"}}
+
+    with patch("dre.service.repo.get_analysis_request", return_value=analysis_request), patch(
+        "dre.service.repo.get_drawing", side_effect=lambda did: drawings[did]
+    ), patch(
+        "dre.service.repo.download_drawing_image_and_raw_bytes",
+        side_effect=lambda d, dest_dir, basename: (dest_dir / f"{basename}.png", b"not-a-pdf"),
+    ), patch(
+        "dre.service.build_pipeline", return_value=SimpleNamespace(run=_fake_pipeline_run)
+    ), patch(
+        "dre.service.repo.create_pipeline_run", return_value="run-1"
+    ), patch("dre.service.repo.set_run_status"), patch(
+        "dre.service.repo.set_analysis_status"
+    ), patch(
+        "dre.service.repo.delete_flagged_changes_for_analysis_request"
+    ), patch(
+        "dre.service.repo.log_tiling_trigger_diagnostics"
+    ), patch(
+        "dre.service.repo.set_tiling_path"
+    ), patch(
+        "dre.service.credits.record_usage", side_effect=Exception("credit_usage insert failed")
+    ):
+        result = service.analyze_request("ar19", dry_run=False)
+
+    assert result["dry_run"] is False
+    assert result["mode"] == "single_sheet"

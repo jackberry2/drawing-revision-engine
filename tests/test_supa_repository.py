@@ -55,6 +55,18 @@ class FakeQuery:
             self.recorder.deletes[-1][1][column] = value
         return self
 
+    def gte(self, column, value, **kwargs):
+        return self
+
+    def lt(self, column, value, **kwargs):
+        return self
+
+    def order(self, column, **kwargs):
+        return self
+
+    def limit(self, n):
+        return self
+
     def single(self):
         return self
 
@@ -305,3 +317,41 @@ def test_record_human_review_false_positive_does_not_mark_reviewed():
 
     assert [t for t, _ in fake.inserts] == ["human_reviews"]
     assert fake.updates == []
+
+
+def test_get_current_subscription_returns_first_row_or_none():
+    fake = FakeClient()
+    fake.fake_data["subscriptions"] = [{"tier": "starter", "status": "active"}]
+    with patch("dre.supa.repository.get_client", return_value=fake):
+        assert repo.get_current_subscription("user-1") == {"tier": "starter", "status": "active"}
+
+    fake2 = FakeClient()
+    fake2.fake_data["subscriptions"] = []
+    with patch("dre.supa.repository.get_client", return_value=fake2):
+        assert repo.get_current_subscription("user-1") is None
+
+
+def test_sum_credits_used_sums_the_credits_used_column():
+    fake = FakeClient()
+    fake.fake_data["credit_usage"] = [{"credits_used": 1}, {"credits_used": 5}, {"credits_used": 1}]
+    with patch("dre.supa.repository.get_client", return_value=fake):
+        total = repo.sum_credits_used("user-1", period_start="2026-08-01", period_end="2026-09-01")
+    assert total == 7
+
+
+def test_sum_credits_used_with_no_usage_is_zero():
+    fake = FakeClient()
+    fake.fake_data["credit_usage"] = []
+    with patch("dre.supa.repository.get_client", return_value=fake):
+        total = repo.sum_credits_used("user-1", period_start=None, period_end=None)
+    assert total == 0
+
+
+def test_record_credit_usage_matches_real_table_columns():
+    fake = FakeClient()
+    with patch("dre.supa.repository.get_client", return_value=fake):
+        repo.record_credit_usage(user_id="user-1", analysis_request_id="req-1", credits_used=5)
+
+    table_name, payload = fake.inserts[0]
+    assert table_name == "credit_usage"
+    assert payload == {"user_id": "user-1", "analysis_request_id": "req-1", "credits_used": 5}

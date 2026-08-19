@@ -278,6 +278,50 @@ def save_pipeline_change_event(
     ).execute()
 
 
+# ---- subscriptions / credit_usage (Lovable-managed; read/write only, we
+# don't own the schema — see dre.credits) ----
+
+
+def get_current_subscription(user_id: str) -> Optional[dict]:
+    """The user's current active subscription row, or None if they have
+    none — dre.credits treats that as 0 credits (fail-closed), not a
+    crash. If a user somehow has more than one active row, the most
+    recently updated one wins."""
+    resp = (
+        get_client()
+        .table("subscriptions")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("status", "active")
+        .order("updated_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    return resp.data[0] if resp.data else None
+
+
+def sum_credits_used(
+    user_id: str, *, period_start: Optional[str], period_end: Optional[str]
+) -> int:
+    query = get_client().table("credit_usage").select("credits_used").eq("user_id", user_id)
+    if period_start is not None:
+        query = query.gte("used_at", period_start)
+    if period_end is not None:
+        query = query.lt("used_at", period_end)
+    resp = query.execute()
+    return sum(row["credits_used"] for row in resp.data)
+
+
+def record_credit_usage(*, user_id: str, analysis_request_id: str, credits_used: int) -> None:
+    get_client().table("credit_usage").insert(
+        {
+            "user_id": user_id,
+            "analysis_request_id": analysis_request_id,
+            "credits_used": credits_used,
+        }
+    ).execute()
+
+
 # ---- human_reviews ----
 
 
