@@ -44,6 +44,68 @@ def test_run_detect_single_on_tile_wires_rasterized_png_into_detect_single():
     assert captured["is_png"] is True
 
 
+def test_run_detect_single_on_tile_shares_usage_sink_with_the_grid_caller():
+    """A per-tile ctx must accumulate into the *same* usage_sink list the
+    grid caller passed in, not its own private default list — otherwise
+    real per-tile token usage would be silently dropped rather than
+    attributed to the run."""
+    import fitz
+
+    doc = fitz.open()
+    doc.new_page(width=400, height=300)
+    pdf_bytes = doc.tobytes()
+    doc.close()
+
+    tiles = compute_tile_grid(sheet_width_in=400 / 72, sheet_height_in=300 / 72, target_dpi=72)
+    tile = tiles[0]
+    fake_result = SingleSheetDetectResult(detections=[], extracted_tables=[])
+
+    def fake_execute(ctx):
+        ctx.token_usage.append({"model": "claude-sonnet-5", "input_tokens": 42, "output_tokens": 7})
+        return fake_result
+
+    shared_sink: list[dict] = []
+    with patch("dre.pipeline.tile_tuning.DetectSingleStep.execute", side_effect=fake_execute):
+        run_detect_single_on_tile(pdf_bytes, tile, dpi=72, usage_sink=shared_sink)
+
+    assert shared_sink == [{"model": "claude-sonnet-5", "input_tokens": 42, "output_tokens": 7}]
+
+
+def test_run_detect_single_on_grid_aggregates_usage_across_all_tiles():
+    """Every tile's usage lands in the one shared sink passed to the grid
+    call — the real, production-used path (dre.pipeline.tiled_detect calls
+    this exact function with ctx.token_usage as usage_sink)."""
+    import fitz
+
+    doc = fitz.open()
+    doc.new_page(width=800, height=600)
+    pdf_bytes = doc.tobytes()
+    doc.close()
+
+    tiles = compute_tile_grid(
+        sheet_width_in=800 / 72, sheet_height_in=600 / 72, target_dpi=72, tile_edge_px=300
+    )
+    assert len(tiles) > 1
+
+    def fake_execute(ctx):
+        ctx.token_usage.append({"model": "claude-sonnet-5", "input_tokens": 10, "output_tokens": 1})
+        return SingleSheetDetectResult(detections=[], extracted_tables=[])
+
+    shared_sink: list[dict] = []
+    with patch("dre.pipeline.tile_tuning.DetectSingleStep.execute", side_effect=fake_execute):
+        run_detect_single_on_grid(
+            pdf_bytes,
+            sheet_width_in=800 / 72,
+            sheet_height_in=600 / 72,
+            dpi=72,
+            tile_edge_px=300,
+            usage_sink=shared_sink,
+        )
+
+    assert len(shared_sink) == len(tiles)
+    assert all(u == {"model": "claude-sonnet-5", "input_tokens": 10, "output_tokens": 1} for u in shared_sink)
+
+
 def test_run_detect_single_on_grid_tags_each_tiles_detections_with_its_own_row_col():
     import fitz
 

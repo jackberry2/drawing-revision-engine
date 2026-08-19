@@ -204,7 +204,7 @@ def test_confidence_step_wires_cross_event_causal_risk_from_ctx_change_events(tm
     ctx = PipelineContext(run_id="run_test", old_image_path=old, new_image_path=new)
     ctx.change_events = [flagged_event, unresolved_event]
 
-    def fake_call_structured(*, system, user_content, response_model, model):
+    def fake_call_structured(*, system, user_content, response_model, model, usage_sink=None):
         change_event_id = ctx.change_events[len(scored_so_far)].id
         scored_so_far.append(change_event_id)
         return ConfidenceFactors(

@@ -226,6 +226,7 @@ class ConfidenceStep(PipelineStep):
                 user_content=_user_content_for(ctx, event),
                 response_model=ConfidenceFactors,
                 model=self.model_used,
+                usage_sink=ctx.token_usage,
             )
             scores.append(
                 _to_confidence_score(

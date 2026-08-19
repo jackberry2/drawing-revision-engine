@@ -41,6 +41,11 @@ class PipelineContext:
     change_events: list[ChangeEvent] = field(default_factory=list)
     confidence_scores: dict[str, ConfidenceScore] = field(default_factory=dict)
     alerts: list[FinalChangeAlert] = field(default_factory=list)
+    # Real per-call token usage, appended to by every `call_structured` call
+    # this run makes (including the parallel per-tile calls under tiling —
+    # see `dre.pipeline.tile_tuning`). One dict per real API attempt:
+    # {"model": ..., "input_tokens": ..., "output_tokens": ...}.
+    token_usage: list[dict] = field(default_factory=list)
 
 
 class PipelineStep(ABC):
@@ -75,6 +80,8 @@ class StepLogger(Protocol):
         model_used: Optional[str],
         prompt_version: Optional[str],
         latency_ms: Optional[int],
+        input_tokens: Optional[int] = None,
+        output_tokens: Optional[int] = None,
     ) -> None: ...
 
 

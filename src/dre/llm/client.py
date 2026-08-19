@@ -64,6 +64,7 @@ def call_structured(
     max_tokens: int = 8192,
     max_attempts: int = 3,
     temperature: Optional[float] = None,
+    usage_sink: Optional[list[dict]] = None,
 ) -> T:
     """Call Claude with a forced tool-use call shaped by `response_model`,
     returning a validated instance of it. Retries the call itself (not just
@@ -75,7 +76,13 @@ def call_structured(
     `claude-sonnet-5` (the current default model) rejects the parameter
     entirely with a 400 ("temperature is deprecated for this model"), so
     this can't be used as a consistency lever against that model. Left in
-    place for models that do support it."""
+    place for models that do support it.
+
+    `usage_sink`, if given, gets one dict appended per real API attempt
+    (including attempts that come back malformed and get retried — those
+    are genuinely billed too). `list.append` is atomic under the GIL, so a
+    single list can safely be shared as the sink across the parallel
+    per-tile calls in `dre.pipeline.tile_tuning` without an explicit lock."""
     tool_name = f"emit_{response_model.__name__.lower()}"
     tool = {
         "name": tool_name,
@@ -97,6 +104,14 @@ def call_structured(
     last_error: Exception | None = None
     for attempt in range(1, max_attempts + 1):
         response = get_client().messages.create(**create_kwargs)
+        if usage_sink is not None:
+            usage_sink.append(
+                {
+                    "model": model,
+                    "input_tokens": response.usage.input_tokens,
+                    "output_tokens": response.usage.output_tokens,
+                }
+            )
 
         tool_block = next(
             (b for b in response.content if b.type == "tool_use" and b.name == tool_name), None

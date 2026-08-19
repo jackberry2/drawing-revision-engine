@@ -227,12 +227,19 @@ def run_tiled_detect_and_merge(
     *,
     dpi: float = TILED_DETECT_DPI,
     max_workers: int = DEFAULT_MAX_PARALLEL_TILE_WORKERS,
+    usage_sink: Optional[list[dict]] = None,
 ) -> tuple[SingleSheetDetectResult, VolumeCapDiagnostics]:
     """The real production entry point: full sheet PDF bytes in, one merged
     `SingleSheetDetectResult` out — ready to replace
     `ctx.detect_single_result`. Per-tile calls run in parallel, bounded by
     `max_workers` (docs/tiled_analysis_findings.md §3f) — see
-    `run_detect_single_on_grid` for why threads, not `asyncio`."""
+    `run_detect_single_on_grid` for why threads, not `asyncio`.
+
+    `usage_sink`, if given, collects every per-tile call's real token usage
+    (see `dre.llm.client.call_structured`) — the production caller
+    (`decide_and_apply_tiling`) passes the real `ctx.token_usage` list so
+    tile calls are attributed to the same run as the original single-pass
+    detect_single call."""
     sheet_width_in, sheet_height_in = sheet_dimensions_in_inches(pdf_bytes)
     grid_result = run_detect_single_on_grid(
         pdf_bytes,
@@ -240,6 +247,7 @@ def run_tiled_detect_and_merge(
         sheet_height_in=sheet_height_in,
         dpi=dpi,
         max_workers=max_workers,
+        usage_sink=usage_sink,
     )
     return merge_tiled_detections(grid_result.tiled_detections, grid_result.extracted_tables)
 
@@ -294,7 +302,9 @@ def decide_and_apply_tiling(
         )
 
     try:
-        tiled_result, cap_diagnostics = run_tiled_detect_and_merge(raw_pdf_bytes, dpi=dpi)
+        tiled_result, cap_diagnostics = run_tiled_detect_and_merge(
+            raw_pdf_bytes, dpi=dpi, usage_sink=ctx.token_usage
+        )
     except Exception:
         return TilingOutcome(path="tiled_failed_fallback", trigger_diagnostics=diagnostics_dict)
 

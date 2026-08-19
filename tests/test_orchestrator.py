@@ -189,6 +189,45 @@ def test_on_after_detect_hook_fires_once_after_detect_and_before_classify(tmp_pa
     assert calls == ["hook"]
 
 
+def test_orchestrator_aggregates_real_token_usage_per_step(tmp_path):
+    """Each stage's call_structured call(s) append to ctx.token_usage (see
+    dre.llm.client's usage_sink); the orchestrator must slice out only the
+    entries a given step actually added and sum them into that step's own
+    log_step call, not leak earlier steps' usage forward."""
+    old = tmp_path / "old.png"
+    new = tmp_path / "new.png"
+    old.write_bytes(b"fake")
+    new.write_bytes(b"fake")
+
+    class UsageDetect(FakeDetect):
+        def execute(self, ctx):
+            ctx.token_usage.append({"model": "claude-sonnet-5", "input_tokens": 100, "output_tokens": 10})
+            return super().execute(ctx)
+
+    class UsageClassify(FakeClassify):
+        def execute(self, ctx):
+            ctx.token_usage.append({"model": "claude-sonnet-5", "input_tokens": 200, "output_tokens": 20})
+            ctx.token_usage.append({"model": "claude-sonnet-5", "input_tokens": 210, "output_tokens": 21})
+            return super().execute(ctx)
+
+    logger = RecordingStepLogger()
+    ctx = PipelineContext(run_id="run_test", old_image_path=old, new_image_path=new)
+    pipeline = Pipeline(
+        [UsageDetect(), UsageClassify(), FakeReason(), FakeConfidence(), FakeDescribe()], logger
+    )
+    pipeline.run(ctx)
+
+    by_step = {c["step_name"]: c for c in logger.calls}
+    assert by_step["detect"]["input_tokens"] == 100
+    assert by_step["detect"]["output_tokens"] == 10
+    assert by_step["classify"]["input_tokens"] == 410
+    assert by_step["classify"]["output_tokens"] == 41
+    # No Claude call made in these fake reason/confidence/describe stages —
+    # must log None, not 0, so a real 0-usage call is distinguishable later.
+    assert by_step["reason"]["input_tokens"] is None
+    assert by_step["reason"]["output_tokens"] is None
+
+
 def test_omitting_on_after_detect_hook_is_unaffected(tmp_path):
     """Every existing caller (eval harness, every other test) doesn't pass
     this hook at all — must stay a pure no-op default, not a behavior

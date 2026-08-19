@@ -63,6 +63,7 @@ class ClassifyStep(PipelineStep):
             user_content=user_content,
             response_model=ClassifyResponse,
             model=self.model_used,
+            usage_sink=ctx.token_usage,
         )
         ctx.classified_changes = result.classified_changes
         return result.classified_changes

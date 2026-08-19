@@ -50,6 +50,7 @@ class ReasonStep(PipelineStep):
             user_content=user_content,
             response_model=ReasonResponse,
             model=self.model_used,
+            usage_sink=ctx.token_usage,
         )
         change_events = enforce_identity_unresolved(result.change_events, material)
         change_events = flag_cross_event_causal_risk(change_events)

@@ -36,6 +36,7 @@ class DetectStep(PipelineStep):
             user_content=user_content,
             response_model=DetectResult,
             model=self.model_used,
+            usage_sink=ctx.token_usage,
         )
         ctx.detect_result = result
         return result

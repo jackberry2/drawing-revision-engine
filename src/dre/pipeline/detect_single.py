@@ -31,6 +31,7 @@ class DetectSingleStep(PipelineStep):
             user_content=user_content,
             response_model=SingleSheetDetectResult,
             model=self.model_used,
+            usage_sink=ctx.token_usage,
         )
         ctx.detect_single_result = result
         return result

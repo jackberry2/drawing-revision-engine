@@ -150,9 +150,17 @@ def analyze_request(analysis_request_id: str, *, dry_run: bool = False) -> dict[
                 # validation behind it (docs/tiled_analysis_findings.md §5).
                 if pipeline_ctx.mode != "single_sheet":
                     return
+                usage_before = len(pipeline_ctx.token_usage)
                 outcome = decide_and_apply_tiling(pipeline_ctx, raw_pdf_bytes=raw_old_bytes)
                 tiling_outcome_holder["outcome"] = outcome
                 if outcome.path == "tiled":
+                    # Only the tile calls made *during this hook* (the
+                    # per-tile detect_single calls) — not the original
+                    # single-pass detect_single call, which was already
+                    # attributed to the "detect_single" step's own log row
+                    # by the orchestrator before this hook ran. Slicing from
+                    # usage_before avoids double-counting that call here.
+                    tile_usage = pipeline_ctx.token_usage[usage_before:]
                     # Logged separately from the detect_single step it
                     # replaces, so pipeline_steps shows both the original
                     # single-pass output AND what tiling produced instead —
@@ -169,6 +177,8 @@ def analyze_request(analysis_request_id: str, *, dry_run: bool = False) -> dict[
                         model_used=None,
                         prompt_version="v1",
                         latency_ms=None,
+                        input_tokens=sum(u["input_tokens"] for u in tile_usage) if tile_usage else None,
+                        output_tokens=sum(u["output_tokens"] for u in tile_usage) if tile_usage else None,
                     )
 
             result = pipeline.run(ctx, on_after_detect=_on_after_detect)

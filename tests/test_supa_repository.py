@@ -186,6 +186,8 @@ def test_log_step_serializes_pydantic_models_to_plain_json():
             model_used="claude-sonnet-5",
             prompt_version="v1",
             latency_ms=1200,
+            input_tokens=1500,
+            output_tokens=300,
         )
 
     table_name, payload = fake.inserts[0]
@@ -195,6 +197,27 @@ def test_log_step_serializes_pydantic_models_to_plain_json():
     assert isinstance(payload["input_json"][0], dict)
     assert payload["input_json"][0]["category"] == "panel_relocation"
     assert isinstance(payload["output_json"]["change_events"][0], dict)
+    assert payload["input_tokens"] == 1500
+    assert payload["output_tokens"] == 300
+
+
+def test_log_step_defaults_token_fields_to_none():
+    """Callers that don't have real usage to report (or old call sites not
+    yet updated) must not silently write 0 — 0 would be indistinguishable
+    from a real zero-token call."""
+    fake = FakeClient()
+    with patch("dre.supa.repository.get_client", return_value=fake):
+        repo.log_step(
+            run_id="run-1",
+            step_name="tile_merge",
+            step_order=1,
+            input_data={},
+            output_data={},
+        )
+
+    _, payload = fake.inserts[0]
+    assert payload["input_tokens"] is None
+    assert payload["output_tokens"] is None
 
 
 def test_record_human_review_confirmed_marks_flagged_change_reviewed():

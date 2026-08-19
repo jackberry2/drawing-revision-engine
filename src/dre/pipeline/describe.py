@@ -53,6 +53,7 @@ class DescribeStep(PipelineStep):
             user_content=user_content,
             response_model=DescribeResponse,
             model=self.model_used,
+            usage_sink=ctx.token_usage,
         )
 
         change_events_by_id = {e.id: e for e in ctx.change_events}

@@ -37,9 +37,11 @@ class Pipeline:
         (eval harness, tests) is unaffected."""
         for order, step in enumerate(self.steps, start=1):
             input_snapshot = step.input_for_log(ctx)
+            usage_before = len(ctx.token_usage)
             t0 = time.perf_counter()
             output = step.execute(ctx)
             latency_ms = int((time.perf_counter() - t0) * 1000)
+            step_usage = ctx.token_usage[usage_before:]
             self.logger.log_step(
                 run_id=ctx.run_id,
                 step_name=step.name,
@@ -49,6 +51,8 @@ class Pipeline:
                 model_used=step.model_used,
                 prompt_version=step.version,
                 latency_ms=latency_ms,
+                input_tokens=sum(u["input_tokens"] for u in step_usage) if step_usage else None,
+                output_tokens=sum(u["output_tokens"] for u in step_usage) if step_usage else None,
             )
             if on_after_detect is not None and step.name in _DETECT_STEP_NAMES:
                 on_after_detect(ctx)

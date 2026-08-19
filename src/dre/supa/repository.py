@@ -171,6 +171,8 @@ def log_step(
     model_used: Optional[str] = None,
     prompt_version: Optional[str] = None,
     latency_ms: Optional[int] = None,
+    input_tokens: Optional[int] = None,
+    output_tokens: Optional[int] = None,
 ) -> None:
     get_client().table("pipeline_steps").insert(
         {
@@ -182,6 +184,8 @@ def log_step(
             "input_json": _to_jsonable(input_data),
             "output_json": _to_jsonable(output_data),
             "latency_ms": latency_ms,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
         }
     ).execute()
 

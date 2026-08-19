@@ -16,6 +16,7 @@ import functools
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Optional
 
 from dataclasses import dataclass, field
 
@@ -47,13 +48,19 @@ class GridDetectResult:
 
 
 def run_detect_single_on_tile(
-    pdf_bytes: bytes, tile: TileSpec, *, dpi: float
+    pdf_bytes: bytes,
+    tile: TileSpec,
+    *,
+    dpi: float,
+    usage_sink: Optional[list[dict]] = None,
 ) -> SingleSheetDetectResult:
     png_bytes = rasterize_pdf_tile_to_png(pdf_bytes, tile, dpi=dpi)
     with tempfile.TemporaryDirectory(prefix="dre_tile_tune_") as tmp:
         tile_path = Path(tmp) / f"tile_r{tile.row}c{tile.col}.png"
         tile_path.write_bytes(png_bytes)
         ctx = PipelineContext(run_id="tile-tune", old_image_path=tile_path, mode="single_sheet")
+        if usage_sink is not None:
+            ctx.token_usage = usage_sink
         return DetectSingleStep().execute(ctx)
 
 
@@ -66,6 +73,7 @@ def run_detect_single_on_grid(
     tile_edge_px: int = DEFAULT_TILE_EDGE_PX,
     overlap_fraction: float = DEFAULT_OVERLAP_FRACTION,
     max_workers: int = DEFAULT_MAX_PARALLEL_TILE_WORKERS,
+    usage_sink: Optional[list[dict]] = None,
 ) -> GridDetectResult:
     """Runs `run_detect_single_on_tile` against every tile in the grid, in
     parallel via a bounded `ThreadPoolExecutor` (docs/tiled_analysis_
@@ -101,7 +109,7 @@ def run_detect_single_on_grid(
         tile_edge_px=tile_edge_px,
         overlap_fraction=overlap_fraction,
     )
-    worker = functools.partial(run_detect_single_on_tile, pdf_bytes, dpi=dpi)
+    worker = functools.partial(run_detect_single_on_tile, pdf_bytes, dpi=dpi, usage_sink=usage_sink)
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         tile_results = list(executor.map(worker, tiles))
 

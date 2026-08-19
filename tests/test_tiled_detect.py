@@ -321,7 +321,9 @@ def test_replaces_detect_single_result_when_rule_fires_against_a_pdf():
     ) as mock_run:
         outcome = decide_and_apply_tiling(ctx, raw_pdf_bytes=b"%PDF-1.4 fake pdf bytes", dpi=150.0)
 
-    mock_run.assert_called_once_with(b"%PDF-1.4 fake pdf bytes", dpi=150.0)
+    mock_run.assert_called_once_with(
+        b"%PDF-1.4 fake pdf bytes", dpi=150.0, usage_sink=ctx.token_usage
+    )
     assert outcome.path == "tiled"
     assert ctx.detect_single_result is tiled_result
     assert outcome.volume_cap_diagnostics == cap_diagnostics.model_dump(mode="json")
