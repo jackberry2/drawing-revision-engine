@@ -12,21 +12,27 @@ def test_credits_for_tiling_path_only_tiled_costs_five():
 
 
 def test_remaining_credits_no_balance_row_is_zero():
-    """No row in user_credit_balance means no active subscription — the
-    view doesn't emit a row for that user at all (see migration
-    0007_user_credit_balance_view.sql)."""
+    """No row from get_credit_balance means no subscription exists at all
+    for this user."""
     with patch("dre.credits.repo.get_credit_balance", return_value=None):
         assert credits.remaining_credits("user-1") == 0
 
 
-def test_remaining_credits_reads_the_view_verbatim():
+def test_remaining_credits_reads_the_rpc_result_verbatim():
     """The balance calculation itself (tier -> allotment, minus
-    current-period usage) now lives entirely in the user_credit_balance
-    view, not here — this just confirms the plumbing reads
-    credits_remaining off whatever row the view returns."""
+    current-period usage) lives entirely inside the real get_credit_balance
+    RPC, not here — this just confirms the plumbing reads
+    credits_remaining off whatever row the RPC returns, for an eligible
+    (active) subscription."""
     with patch(
         "dre.credits.repo.get_credit_balance",
-        return_value={"user_id": "user-1", "tier": "starter", "credits_remaining": 9},
+        return_value={
+            "user_id": "user-1",
+            "tier": "starter",
+            "status": "active",
+            "current_period_end": None,
+            "credits_remaining": 9,
+        },
     ):
         assert credits.remaining_credits("user-1") == 9
 
@@ -34,9 +40,71 @@ def test_remaining_credits_reads_the_view_verbatim():
 def test_remaining_credits_can_go_negative_from_overage():
     with patch(
         "dre.credits.repo.get_credit_balance",
-        return_value={"user_id": "user-1", "tier": "standard", "credits_remaining": -5},
+        return_value={
+            "user_id": "user-1",
+            "tier": "standard",
+            "status": "active",
+            "current_period_end": None,
+            "credits_remaining": -5,
+        },
     ):
         assert credits.remaining_credits("user-1") == -5
+
+
+# ---- eligibility gate (mirrors the real consume_credits RPC's own check,
+# since we don't call consume_credits — see this module's docstring) ------
+
+
+@pytest.mark.parametrize("status", ["active", "trialing", "past_due"])
+def test_remaining_credits_eligible_for_active_trialing_past_due(status):
+    with patch(
+        "dre.credits.repo.get_credit_balance",
+        return_value={
+            "status": status,
+            "current_period_end": None,
+            "credits_remaining": 7,
+        },
+    ):
+        assert credits.remaining_credits("user-1") == 7
+
+
+def test_remaining_credits_canceled_with_future_period_end_is_still_eligible():
+    """A canceled subscription is still real and paid-through until its
+    current period actually ends — matches consume_credits' own rule."""
+    from datetime import datetime, timedelta, timezone
+
+    future = (datetime.now(timezone.utc) + timedelta(days=5)).isoformat()
+    with patch(
+        "dre.credits.repo.get_credit_balance",
+        return_value={"status": "canceled", "current_period_end": future, "credits_remaining": 7},
+    ):
+        assert credits.remaining_credits("user-1") == 7
+
+
+def test_remaining_credits_canceled_with_past_or_null_period_end_is_ineligible():
+    from datetime import datetime, timedelta, timezone
+
+    past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    with patch(
+        "dre.credits.repo.get_credit_balance",
+        return_value={"status": "canceled", "current_period_end": past, "credits_remaining": 7},
+    ):
+        assert credits.remaining_credits("user-1") == 0
+
+    with patch(
+        "dre.credits.repo.get_credit_balance",
+        return_value={"status": "canceled", "current_period_end": None, "credits_remaining": 7},
+    ):
+        assert credits.remaining_credits("user-1") == 0
+
+
+@pytest.mark.parametrize("status", ["incomplete", "unpaid", None])
+def test_remaining_credits_other_statuses_are_ineligible(status):
+    with patch(
+        "dre.credits.repo.get_credit_balance",
+        return_value={"status": status, "current_period_end": None, "credits_remaining": 7},
+    ):
+        assert credits.remaining_credits("user-1") == 0
 
 
 def test_check_sufficient_credits_raises_at_zero_or_below():

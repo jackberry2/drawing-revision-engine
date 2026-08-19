@@ -74,15 +74,31 @@ class FakeQuery:
         return SimpleNamespace(data=self.recorder.fake_data.get(self.table_name))
 
 
+class FakeRpc:
+    def __init__(self, name: str, params: dict, recorder: "FakeClient"):
+        self.name = name
+        self.params = params
+        self.recorder = recorder
+
+    def execute(self):
+        self.recorder.rpc_calls.append((self.name, self.params))
+        return SimpleNamespace(data=self.recorder.fake_rpc_data.get(self.name))
+
+
 class FakeClient:
     def __init__(self):
         self.inserts: list[tuple[str, dict]] = []
+        self.rpc_calls: list[tuple[str, dict]] = []
+        self.fake_rpc_data: dict[str, list] = {}
         self.updates: list[tuple[str, dict]] = []
         self.deletes: list[list] = []
         self.fake_data: dict[str, dict] = {}
 
     def table(self, name: str) -> FakeQuery:
         return FakeQuery(name, self)
+
+    def rpc(self, name: str, params: dict) -> FakeRpc:
+        return FakeRpc(name, params, self)
 
 
 def test_save_flagged_change_matches_real_table_columns():
@@ -319,20 +335,27 @@ def test_record_human_review_false_positive_does_not_mark_reviewed():
     assert fake.updates == []
 
 
-def test_get_credit_balance_returns_first_row_or_none():
+def test_get_credit_balance_calls_the_real_rpc_and_returns_first_row_or_none():
+    """dre.supa.repository.get_credit_balance calls the real, pre-existing
+    get_credit_balance(_user_id) Postgres RPC - not a table/view - since
+    that RPC (discovered via real introspection, not built by this
+    project) is the actual single source of truth for a user's balance."""
     fake = FakeClient()
-    fake.fake_data["user_credit_balance"] = [
-        {"user_id": "user-1", "tier": "starter", "credits_remaining": 9}
+    fake.fake_rpc_data["get_credit_balance"] = [
+        {"user_id": "user-1", "tier": "starter", "status": "active", "credits_remaining": 9}
     ]
     with patch("dre.supa.repository.get_client", return_value=fake):
-        assert repo.get_credit_balance("user-1") == {
-            "user_id": "user-1",
-            "tier": "starter",
-            "credits_remaining": 9,
-        }
+        result = repo.get_credit_balance("user-1")
+    assert result == {
+        "user_id": "user-1",
+        "tier": "starter",
+        "status": "active",
+        "credits_remaining": 9,
+    }
+    assert fake.rpc_calls == [("get_credit_balance", {"_user_id": "user-1"})]
 
     fake2 = FakeClient()
-    fake2.fake_data["user_credit_balance"] = []
+    fake2.fake_rpc_data["get_credit_balance"] = []
     with patch("dre.supa.repository.get_client", return_value=fake2):
         assert repo.get_credit_balance("user-1") is None
 

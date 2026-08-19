@@ -283,20 +283,21 @@ def save_pipeline_change_event(
 
 
 def get_credit_balance(user_id: str) -> Optional[dict]:
-    """Reads the real `user_credit_balance` Postgres view (migration
-    0007_user_credit_balance_view.sql) — the single source of truth for a
-    user's balance, also read directly by Lovable's frontend usage bar, so
-    the two can never disagree. None means no row in the view (no active
-    subscription); dre.credits treats that as 0 credits (fail-closed), not
-    a crash."""
-    resp = (
-        get_client()
-        .table("user_credit_balance")
-        .select("*")
-        .eq("user_id", user_id)
-        .limit(1)
-        .execute()
-    )
+    """Calls the real, pre-existing `get_credit_balance(_user_id)` Postgres
+    RPC (built independently, discovered via migration 0008's diagnostic
+    introspection — see dre.credits's module docstring) — the single
+    source of truth for a user's balance, also callable directly by
+    Lovable's frontend as the authenticated user. SECURITY INVOKER, so
+    passing an explicit user_id is safe here specifically because this
+    service calls it via the service role, which bypasses RLS by design —
+    same trust level as every other service-role read this backend does.
+
+    None means no subscription row exists at all for this user; a row
+    with an ineligible status (canceled and expired, etc.) is still
+    returned — dre.credits applies that eligibility check itself, since
+    it isn't encoded in this RPC (only in consume_credits, which this
+    service can't call — see dre.credits)."""
+    resp = get_client().rpc("get_credit_balance", {"_user_id": user_id}).execute()
     return resp.data[0] if resp.data else None
 
 
