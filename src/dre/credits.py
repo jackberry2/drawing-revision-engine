@@ -14,16 +14,21 @@ Real, confirmed-live schema:
   credit_usage(id, user_id, analysis_request_id -> analysis_requests.id,
     credits_used[default 1], used_at)
 
-Tier names are lowercase ('starter'/'standard'/'pro'), matching the `tier`
-column's own default value — not yet confirmed against a real subscription
-row (none existed at build time), since Stripe wiring is brand new.
+The balance calculation itself (tier -> monthly allotment, minus
+current-period credit_usage) lives in exactly one place: the
+`user_credit_balance` Postgres view (migration
+0007_user_credit_balance_view.sql), not here. This service's pre-check and
+Lovable's frontend usage bar both read that same view, so they can never
+disagree about a user's balance — this module used to compute it inline in
+Python, which risked drifting from whatever the frontend showed.
+
+Tier names are lowercase ('starter'/'standard'/'pro'), matching the
+`subscriptions.tier` column's own default value.
 """
 
 from __future__ import annotations
 
 from dre.supa import repository as repo
-
-TIER_MONTHLY_CREDITS = {"starter": 15, "standard": 40, "pro": 100}
 
 # Only "tiled" actually ran the more expensive per-tile grid. Every other
 # real tiling_path value ("single_pass", "single_pass_no_pdf_source",
@@ -50,32 +55,15 @@ def credits_for_tiling_path(tiling_path: str) -> int:
 
 
 def remaining_credits(user_id: str) -> int:
-    """Real current-period balance: the user's subscription tier's monthly
-    allotment minus real credit_usage recorded so far this billing period.
-
-    Fails closed in every ambiguous case — a real, active subscription must
-    be found with a recognized tier, or this returns 0 (blocks the request)
-    rather than guessing a generous default:
-    - No subscription row at all, or none with status='active' -> 0.
-    - An unrecognized tier value -> 0.
-    - current_period_start/current_period_end unset (no Stripe period yet,
-      e.g. a fresh sandbox subscription) -> falls back to summing *all*
-      credit_usage ever recorded for this user on that side, so a null
-      period can't be used to bypass metering entirely."""
-    subscription = repo.get_current_subscription(user_id)
-    if subscription is None:
+    """Real current-period balance, read from the `user_credit_balance`
+    view — the single source of truth (see this module's docstring). No
+    row means no active subscription, which fails closed to 0 (blocks the
+    request) rather than guessing a generous default; the view itself
+    fails an unrecognized tier closed to 0 the same way."""
+    balance = repo.get_credit_balance(user_id)
+    if balance is None:
         return 0
-
-    allotment = TIER_MONTHLY_CREDITS.get(subscription.get("tier"))
-    if allotment is None:
-        return 0
-
-    used = repo.sum_credits_used(
-        user_id,
-        period_start=subscription.get("current_period_start"),
-        period_end=subscription.get("current_period_end"),
-    )
-    return allotment - used
+    return balance["credits_remaining"]
 
 
 def check_sufficient_credits(user_id: str) -> None:

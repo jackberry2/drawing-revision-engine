@@ -11,45 +11,32 @@ def test_credits_for_tiling_path_only_tiled_costs_five():
         assert credits.credits_for_tiling_path(path) == 1
 
 
-def test_remaining_credits_no_subscription_is_zero():
-    with patch("dre.credits.repo.get_current_subscription", return_value=None):
+def test_remaining_credits_no_balance_row_is_zero():
+    """No row in user_credit_balance means no active subscription — the
+    view doesn't emit a row for that user at all (see migration
+    0007_user_credit_balance_view.sql)."""
+    with patch("dre.credits.repo.get_credit_balance", return_value=None):
         assert credits.remaining_credits("user-1") == 0
 
 
-def test_remaining_credits_unrecognized_tier_is_zero():
+def test_remaining_credits_reads_the_view_verbatim():
+    """The balance calculation itself (tier -> allotment, minus
+    current-period usage) now lives entirely in the user_credit_balance
+    view, not here — this just confirms the plumbing reads
+    credits_remaining off whatever row the view returns."""
     with patch(
-        "dre.credits.repo.get_current_subscription",
-        return_value={"tier": "enterprise", "current_period_start": None, "current_period_end": None},
+        "dre.credits.repo.get_credit_balance",
+        return_value={"user_id": "user-1", "tier": "starter", "credits_remaining": 9},
     ):
-        assert credits.remaining_credits("user-1") == 0
-
-
-def test_remaining_credits_subtracts_usage_within_period():
-    subscription = {
-        "tier": "starter",
-        "current_period_start": "2026-08-01T00:00:00Z",
-        "current_period_end": "2026-09-01T00:00:00Z",
-    }
-    with patch("dre.credits.repo.get_current_subscription", return_value=subscription), patch(
-        "dre.credits.repo.sum_credits_used", return_value=6
-    ) as mock_sum:
-        assert credits.remaining_credits("user-1") == 15 - 6
-
-    mock_sum.assert_called_once_with(
-        "user-1", period_start="2026-08-01T00:00:00Z", period_end="2026-09-01T00:00:00Z"
-    )
+        assert credits.remaining_credits("user-1") == 9
 
 
 def test_remaining_credits_can_go_negative_from_overage():
-    subscription = {
-        "tier": "standard",
-        "current_period_start": "2026-08-01T00:00:00Z",
-        "current_period_end": "2026-09-01T00:00:00Z",
-    }
-    with patch("dre.credits.repo.get_current_subscription", return_value=subscription), patch(
-        "dre.credits.repo.sum_credits_used", return_value=45
+    with patch(
+        "dre.credits.repo.get_credit_balance",
+        return_value={"user_id": "user-1", "tier": "standard", "credits_remaining": -5},
     ):
-        assert credits.remaining_credits("user-1") == 40 - 45 == -5
+        assert credits.remaining_credits("user-1") == -5
 
 
 def test_check_sufficient_credits_raises_at_zero_or_below():

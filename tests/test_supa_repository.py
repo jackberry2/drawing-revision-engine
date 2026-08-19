@@ -319,32 +319,22 @@ def test_record_human_review_false_positive_does_not_mark_reviewed():
     assert fake.updates == []
 
 
-def test_get_current_subscription_returns_first_row_or_none():
+def test_get_credit_balance_returns_first_row_or_none():
     fake = FakeClient()
-    fake.fake_data["subscriptions"] = [{"tier": "starter", "status": "active"}]
+    fake.fake_data["user_credit_balance"] = [
+        {"user_id": "user-1", "tier": "starter", "credits_remaining": 9}
+    ]
     with patch("dre.supa.repository.get_client", return_value=fake):
-        assert repo.get_current_subscription("user-1") == {"tier": "starter", "status": "active"}
+        assert repo.get_credit_balance("user-1") == {
+            "user_id": "user-1",
+            "tier": "starter",
+            "credits_remaining": 9,
+        }
 
     fake2 = FakeClient()
-    fake2.fake_data["subscriptions"] = []
+    fake2.fake_data["user_credit_balance"] = []
     with patch("dre.supa.repository.get_client", return_value=fake2):
-        assert repo.get_current_subscription("user-1") is None
-
-
-def test_sum_credits_used_sums_the_credits_used_column():
-    fake = FakeClient()
-    fake.fake_data["credit_usage"] = [{"credits_used": 1}, {"credits_used": 5}, {"credits_used": 1}]
-    with patch("dre.supa.repository.get_client", return_value=fake):
-        total = repo.sum_credits_used("user-1", period_start="2026-08-01", period_end="2026-09-01")
-    assert total == 7
-
-
-def test_sum_credits_used_with_no_usage_is_zero():
-    fake = FakeClient()
-    fake.fake_data["credit_usage"] = []
-    with patch("dre.supa.repository.get_client", return_value=fake):
-        total = repo.sum_credits_used("user-1", period_start=None, period_end=None)
-    assert total == 0
+        assert repo.get_credit_balance("user-1") is None
 
 
 def test_record_credit_usage_matches_real_table_columns():
